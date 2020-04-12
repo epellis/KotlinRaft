@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.nedellis.kotlinraft";
+option java_outer_classname = "RaftProto";
+
+package kotlinraft;
+
+service Discovery {
+  rpc RegisterNewClient (RegisterNewClientRequest) returns (RegisterNewClientResponse) {}
+}
+
+message RegisterNewClientRequest {
+  int32 port = 1;
+}
+
+message RegisterNewClientResponse {
+  repeated int32 clientPorts = 1;
+}
+
