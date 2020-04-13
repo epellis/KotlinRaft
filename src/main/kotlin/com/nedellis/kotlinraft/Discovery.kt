@@ -2,6 +2,7 @@ package com.nedellis.kotlinraft
 
 import io.grpc.ServerBuilder
 import io.grpc.stub.StreamObserver
+import mu.KotlinLogging
 
 // Allows clients to discover one another
 class Discovery(val port: Int) {

@@ -1,15 +1,22 @@
 package com.nedellis.kotlinraft
 
-fun main() {
-    val discoveryServer = Discovery(8000)
-    discoveryServer.run()
+import com.github.ajalt.clikt.core.CliktCommand
+import com.github.ajalt.clikt.parameters.options.default
+import com.github.ajalt.clikt.parameters.options.option
+import com.github.ajalt.clikt.parameters.types.int
 
-    val clients = (0..10).map {
-        Raft(8001 + it, 8000)
-    }
+class RunRaft : CliktCommand() {
+    val port: Int by option(help = "Starting port to run off of").int().default(8000)
+    val clients: Int by option(help = "Number of raft clients to run").int().default(1)
 
-    for (client in clients) {
-        client.run()
+    override fun run() {
+        System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "INFO");
+
+        Discovery(port).run()
+        for (clientPort in port + 1..port + clients + 1) {
+            Raft(clientPort, port).run()
+        }
     }
 }
 
+fun main(args: Array<String>) = RunRaft().main(args)
