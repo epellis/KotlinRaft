@@ -3,96 +3,90 @@ package com.nedellis.kotlinraft
 import io.grpc.ManagedChannelBuilder
 import io.grpc.ServerBuilder
 import io.grpc.stub.StreamObserver
-import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ticker
 import kotlinx.coroutines.guava.await
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
-import mu.KotlinLogging
+import org.slf4j.LoggerFactory
 import kotlin.math.min
 
-class Raft(val port: Int, val discoveryPort: Int) {
-    private val discoveryChannel = ManagedChannelBuilder.forAddress("localhost", discoveryPort)
-        .usePlaintext()
-        .build()
-    private val discoveryStub = DiscoveryGrpc.newFutureStub(discoveryChannel)
-    private var raftStubs = mutableMapOf<Int, RaftGrpc.RaftFutureStub>()
-    private var clients = mutableSetOf<Int>()
+class Raft(val port: Int, val clients: List<Int>) {
     private val requestVoteChannel = Channel<RaftAction.RequestVote>(Channel.UNLIMITED)
     private val appendEntryChannel = Channel<RaftAction.AppendEntries>(Channel.UNLIMITED)
     private val electionResultsChannel = Channel<RaftAction.ElectionResults>(Channel.UNLIMITED)
     private val server = ServerBuilder.forPort(port)
         .addService(RaftImpl(requestVoteChannel, appendEntryChannel))
         .build()
+    private val raftStubs = mutableMapOf<Int, RaftGrpc.RaftFutureStub>()
     private val state = RaftState()
-    private var role = RaftRole.FOLLOWER
+    private val logger = LoggerFactory.getLogger("Raft $port")
     private var hasGottenLeaderPing = false
-    private val logger = KotlinLogging.logger {}
-    val table = mutableMapOf<String, String>()
+    private var role = RaftRole.FOLLOWER
 
-    private suspend fun registerAndGetClients(): MutableSet<Int> {
-        val request = RegisterNewClientRequest.newBuilder().setPort(port).build()
-        val response = discoveryStub.registerNewClient(request).await()
-        return response.clientPortsList.toMutableSet()
-    }
-
-    fun run() = GlobalScope.launch {
-        clients = registerAndGetClients()
+    init {
+        // Setup a gRPC connection to each peer using HTTP channels
         for (clientPort in clients) {
             val channel = ManagedChannelBuilder.forAddress("localhost", clientPort)
                 .usePlaintext()
                 .build()
             raftStubs[clientPort] = RaftGrpc.newFutureStub(channel)
         }
+    }
 
-        Thread { server.start().awaitTermination() }.start()
+    suspend fun run() {
+        coroutineScope {
+            delay((1..100).random().toLong())
 
-        val leaderTimeoutTicker = ticker(1000L)
-        val electionTimeoutTicker = ticker(3000L)
-        val leaderPingTicker = ticker(1000L)
+            logger.info("Running on port: $port")
+            Thread { server.start().awaitTermination() }.start()
 
-        // Event loop, reads from action channels
-        while (true) {
-            select<Unit> {
-                requestVoteChannel.onReceive { message ->
-                    requestVote(message)
-                }
-                appendEntryChannel.onReceive { message ->
-                    role = RaftRole.CANDIDATE
-                    appendEntries(message)
-                }
-                leaderTimeoutTicker.onReceive {
-                    logger.info { "Leader Timeout" }
-                    if (role == RaftRole.FOLLOWER) {
-                        if (!hasGottenLeaderPing) {
-                            role = RaftRole.CANDIDATE
+            val leaderTimeoutTicker = ticker(1000L)
+            val electionTimeoutTicker = ticker(3000L)
+            val leaderPingTicker = ticker(1000L)
+
+            // Event loop, reads from action channels
+            while (true) {
+                select<Unit> {
+                    requestVoteChannel.onReceive { message ->
+                        logger.info("Got Request Vote Message: $message")
+                        requestVote(message)
+                    }
+                    appendEntryChannel.onReceive { message ->
+                        logger.info("Got Append Entry Message: $message")
+                        role = RaftRole.CANDIDATE
+                        appendEntries(message)
+                    }
+                    leaderTimeoutTicker.onReceive {
+                        if (role == RaftRole.FOLLOWER) {
+                            if (!hasGottenLeaderPing) {
+                                logger.info("Transition to candidate")
+                                role = RaftRole.CANDIDATE
+                            }
                         }
                     }
-                }
-                electionTimeoutTicker.onReceive {
-                    logger.info { "Election Timeout" }
-                    if (role == RaftRole.CANDIDATE) {
-                        launch {
-                            startNewElection()
+                    electionTimeoutTicker.onReceive {
+                        if (role == RaftRole.CANDIDATE) {
+                            launch {
+                                startNewElection()
+                            }
                         }
                     }
-                }
-                leaderPingTicker.onReceive {
-                    logger.info { "Leader Ping Timer" }
-                    if (role == RaftRole.LEADER) {
-                        launch {
-                            updateFollowers()
-                        }
-                    }
-                }
-                electionResultsChannel.onReceive { results ->
-                    if (role == RaftRole.CANDIDATE) {
-                        if (results.votesReceived >= clients.size / 2) {
+                    leaderPingTicker.onReceive {
+                        if (role == RaftRole.LEADER) {
                             launch {
                                 updateFollowers()
                             }
-                            role == RaftRole.LEADER
+                        }
+                    }
+                    electionResultsChannel.onReceive { results ->
+                        if (role == RaftRole.CANDIDATE) {
+                            if (results.votesReceived >= clients.size / 2) {
+                                launch {
+                                    updateFollowers()
+                                }
+                                role == RaftRole.LEADER
+                            }
                         }
                     }
                 }
@@ -150,6 +144,7 @@ class Raft(val port: Int, val discoveryPort: Int) {
     }
 
     private suspend fun startNewElection() {
+        logger.info("Starting new election")
         val term = state.currentTerm
 
         state.currentTerm++

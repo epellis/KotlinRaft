@@ -4,17 +4,26 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.int
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 class RunRaft : CliktCommand() {
     val port: Int by option(help = "Starting port to run off of").int().default(8000)
-    val clients: Int by option(help = "Number of raft clients to run").int().default(1)
+    val clients: Int by option(help = "Number of raft clients to run").int().default(2)
 
     override fun run() {
         System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "INFO");
 
-        Discovery(port).run()
-        for (clientPort in port + 1..port + clients + 1) {
-            Raft(clientPort, port).run()
+        val clients = (port until port + clients).toList()
+        val rafts = clients.map {
+            Raft(it, clients)
+        }
+        runBlocking {
+            for (raft in rafts) {
+                launch {
+                    raft.run()
+                }
+            }
         }
     }
 }
