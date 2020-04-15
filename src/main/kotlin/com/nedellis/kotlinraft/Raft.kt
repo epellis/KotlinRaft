@@ -23,7 +23,6 @@ class Raft(val port: Int, val clients: List<Int>) {
     private val raftStubs = mutableMapOf<Int, RaftGrpc.RaftFutureStub>()
     private val state = RaftState()
     private val logger = LoggerFactory.getLogger("Raft $port")
-    private var hasGottenLeaderPing = false
     private var role = RaftRole.FOLLOWER
 
     init {
@@ -42,9 +41,11 @@ class Raft(val port: Int, val clients: List<Int>) {
         logger.info("Running on port: $port")
         Thread { server.start().awaitTermination() }.start()
 
-        val leaderTimeoutTicker = ticker(1000L)
         val electionTimeoutTicker = ticker(3000L)
         val leaderPingTicker = ticker(1000L)
+        val leaderTimeoutChannel = Channel<Unit>()
+
+        var leaderTimeoutCoroutine = launch { checkForLeaderTimeout(leaderTimeoutChannel) }
 
         // Event loop, reads from action channels
         while (true) {
@@ -53,18 +54,16 @@ class Raft(val port: Int, val clients: List<Int>) {
                     requestVote(message)
                 }
                 appendEntryChannel.onReceive { message ->
-                    logger.info("AppendEntries: ${message.req}")
-                    role = RaftRole.FOLLOWER
+                    logger.info("AppendEntries from: ${message.req.leaderID}")
                     appendEntries(message)
-                    hasGottenLeaderPing = true
+                    leaderTimeoutCoroutine.cancel()
+                    logger.info("Resetting leader timeout")
+                    leaderTimeoutCoroutine = launch { checkForLeaderTimeout(leaderTimeoutChannel) }
                 }
-                leaderTimeoutTicker.onReceive {
+                leaderTimeoutChannel.onReceive {
                     if (role == RaftRole.FOLLOWER) {
-                        if (!hasGottenLeaderPing) {
-                            logger.info("Transition to candidate")
-                            role = RaftRole.CANDIDATE
-                        }
-                        hasGottenLeaderPing = false
+                        logger.info("Transition to candidate")
+                        role = RaftRole.CANDIDATE
                     }
                 }
                 electionTimeoutTicker.onReceive {
@@ -75,7 +74,9 @@ class Raft(val port: Int, val clients: List<Int>) {
                     }
                 }
                 leaderPingTicker.onReceive {
+                    logger.info("Leader Ping, Role = $role")
                     if (role == RaftRole.LEADER) {
+                        logger.info("Updating Followers")
                         launch {
                             updateFollowers()
                         }
@@ -84,11 +85,12 @@ class Raft(val port: Int, val clients: List<Int>) {
                 electionResultsChannel.onReceive { results ->
                     logger.info("Received election results: $results")
                     if (role == RaftRole.CANDIDATE) {
-                        if (results.votesReceived >= clients.size / 2) {
+                        if (results.votesReceived >= clients.size / 2.0) {
+                            logger.info("Setting to leader")
                             launch {
                                 updateFollowers()
                             }
-                            role == RaftRole.LEADER
+                            role = RaftRole.LEADER
                         }
                     }
                 }
@@ -97,6 +99,10 @@ class Raft(val port: Int, val clients: List<Int>) {
     }
 
     private fun appendEntries(ctx: RaftAction.AppendEntries) {
+        if (ctx.req.leaderID != port) {
+            role = RaftRole.FOLLOWER
+        }
+
         // Reply false if term < currentTerm
         if (ctx.req.term < state.currentTerm) {
             val reply = AppendEntriesResponse.newBuilder().setSuccess(false).setTerm(state.currentTerm).build()
@@ -156,6 +162,11 @@ class Raft(val port: Int, val clients: List<Int>) {
         logger.info("Voting for ${ctx.req.candidateID}")
         ctx.res.onNext(reply.setVoteGranted(true).build())
         ctx.res.onCompleted()
+    }
+
+    private suspend fun checkForLeaderTimeout(channel: Channel<Unit>) {
+        delay(5000L)
+        channel.send(Unit)
     }
 
     private suspend fun startNewElection() {
