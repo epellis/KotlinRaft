@@ -53,8 +53,10 @@ class Raft(val port: Int, val clients: List<Int>) {
                     requestVote(message)
                 }
                 appendEntryChannel.onReceive { message ->
-                    role = RaftRole.CANDIDATE
+                    logger.info("AppendEntries: ${message.req}")
+                    role = RaftRole.FOLLOWER
                     appendEntries(message)
+                    hasGottenLeaderPing = true
                 }
                 leaderTimeoutTicker.onReceive {
                     if (role == RaftRole.FOLLOWER) {
@@ -62,6 +64,7 @@ class Raft(val port: Int, val clients: List<Int>) {
                             logger.info("Transition to candidate")
                             role = RaftRole.CANDIDATE
                         }
+                        hasGottenLeaderPing = false
                     }
                 }
                 electionTimeoutTicker.onReceive {
@@ -99,6 +102,7 @@ class Raft(val port: Int, val clients: List<Int>) {
             val reply = AppendEntriesResponse.newBuilder().setSuccess(false).setTerm(state.currentTerm).build()
             ctx.res.onNext(reply)
             ctx.res.onCompleted()
+            return
         }
 
         // Reply false if log doesn't contain an entry at prevLogindex whose term matches prevLogTerm
@@ -106,6 +110,7 @@ class Raft(val port: Int, val clients: List<Int>) {
             val reply = AppendEntriesResponse.newBuilder().setSuccess(false).setTerm(state.currentTerm).build()
             ctx.res.onNext(reply)
             ctx.res.onCompleted()
+            return
         }
 
         // If the existing entry conflicts with a new one, delete the existing entry and all that follow it
@@ -195,7 +200,21 @@ class Raft(val port: Int, val clients: List<Int>) {
         coroutineScope {
             for (client in clients) {
                 launch {
-
+                    val request = AppendEntriesRequest.newBuilder()
+                        .setTerm(state.currentTerm)
+                        .setLeaderID(port)
+                        .setPrevLogIndex(0) // TODO
+                        .setPrevLogTerm(state.currentTerm) // TODO
+                        .setLeaderCommit(0) // TODO
+                        .build()
+                    raftStubs[client]?.withDeadlineAfter(500, TimeUnit.MILLISECONDS)?.let { stub ->
+                        try {
+                            val response = stub.appendEntries(request).await()
+                            // TODO: update metadata based on response
+                        } catch (e: io.grpc.StatusRuntimeException) {
+                            logger.info("AppendEntries request to $client failed")
+                        }
+                    }
                 }
             }
         }
