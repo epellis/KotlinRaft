@@ -9,6 +9,8 @@ import kotlinx.coroutines.channels.ticker
 import kotlinx.coroutines.guava.await
 import kotlinx.coroutines.selects.select
 import org.slf4j.LoggerFactory
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
 class Raft(val port: Int, val clients: List<Int>) {
@@ -34,59 +36,56 @@ class Raft(val port: Int, val clients: List<Int>) {
         }
     }
 
-    suspend fun run() {
-        coroutineScope {
-            delay((1..100).random().toLong())
+    suspend fun run() = coroutineScope {
+        delay((1..1000).random().toLong())
 
-            logger.info("Running on port: $port")
-            Thread { server.start().awaitTermination() }.start()
+        logger.info("Running on port: $port")
+        Thread { server.start().awaitTermination() }.start()
 
-            val leaderTimeoutTicker = ticker(1000L)
-            val electionTimeoutTicker = ticker(3000L)
-            val leaderPingTicker = ticker(1000L)
+        val leaderTimeoutTicker = ticker(1000L)
+        val electionTimeoutTicker = ticker(3000L)
+        val leaderPingTicker = ticker(1000L)
 
-            // Event loop, reads from action channels
-            while (true) {
-                select<Unit> {
-                    requestVoteChannel.onReceive { message ->
-                        logger.info("Got Request Vote Message: $message")
-                        requestVote(message)
-                    }
-                    appendEntryChannel.onReceive { message ->
-                        logger.info("Got Append Entry Message: $message")
-                        role = RaftRole.CANDIDATE
-                        appendEntries(message)
-                    }
-                    leaderTimeoutTicker.onReceive {
-                        if (role == RaftRole.FOLLOWER) {
-                            if (!hasGottenLeaderPing) {
-                                logger.info("Transition to candidate")
-                                role = RaftRole.CANDIDATE
-                            }
+        // Event loop, reads from action channels
+        while (true) {
+            select<Unit> {
+                requestVoteChannel.onReceive { message ->
+                    requestVote(message)
+                }
+                appendEntryChannel.onReceive { message ->
+                    role = RaftRole.CANDIDATE
+                    appendEntries(message)
+                }
+                leaderTimeoutTicker.onReceive {
+                    if (role == RaftRole.FOLLOWER) {
+                        if (!hasGottenLeaderPing) {
+                            logger.info("Transition to candidate")
+                            role = RaftRole.CANDIDATE
                         }
                     }
-                    electionTimeoutTicker.onReceive {
-                        if (role == RaftRole.CANDIDATE) {
-                            launch {
-                                startNewElection()
-                            }
+                }
+                electionTimeoutTicker.onReceive {
+                    if (role == RaftRole.CANDIDATE) {
+                        launch {
+                            startNewElection()
                         }
                     }
-                    leaderPingTicker.onReceive {
-                        if (role == RaftRole.LEADER) {
+                }
+                leaderPingTicker.onReceive {
+                    if (role == RaftRole.LEADER) {
+                        launch {
+                            updateFollowers()
+                        }
+                    }
+                }
+                electionResultsChannel.onReceive { results ->
+                    logger.info("Received election results: $results")
+                    if (role == RaftRole.CANDIDATE) {
+                        if (results.votesReceived >= clients.size / 2) {
                             launch {
                                 updateFollowers()
                             }
-                        }
-                    }
-                    electionResultsChannel.onReceive { results ->
-                        if (role == RaftRole.CANDIDATE) {
-                            if (results.votesReceived >= clients.size / 2) {
-                                launch {
-                                    updateFollowers()
-                                }
-                                role == RaftRole.LEADER
-                            }
+                            role == RaftRole.LEADER
                         }
                     }
                 }
@@ -123,51 +122,83 @@ class Raft(val port: Int, val clients: List<Int>) {
     }
 
     private fun requestVote(ctx: RaftAction.RequestVote) {
-        // Reply false if term < currentTerm
-        if (ctx.req.term < state.currentTerm) {
-            val reply = RequestVoteResponse.newBuilder().setTerm(state.currentTerm).setVoteGranted(false).build()
-            ctx.res.onNext(reply)
-            ctx.res.onCompleted()
+        val reply = RequestVoteResponse.newBuilder().setTerm(state.currentTerm)
+
+        // If RPC term is higher than current term, update current term and convert to follower
+        if (ctx.req.term > state.currentTerm) {
+            state.currentTerm = ctx.req.term
+            role = RaftRole.FOLLOWER
         }
 
-        // If votedFor is null or candidateID and candidate's log is at least as up to date as receiver's log, grant vote
-        if ((state.votedFor == null || state.votedFor == ctx.req.candidateID) && ctx.req.lastLogIndex >= state.log.size && ctx.req.lastLogTerm >= state.currentTerm) {
-            val reply = RequestVoteResponse.newBuilder().setTerm(state.currentTerm).setVoteGranted(true).build()
-            ctx.res.onNext(reply)
+        // Reply false if term < currentTerm
+        if (ctx.req.term < state.currentTerm) {
+            logger.info("Denying ${ctx.req} because term is stale")
+            ctx.res.onNext(reply.setVoteGranted(false).build())
             ctx.res.onCompleted()
-            state.votedFor = ctx.req.candidateID
-        } else {
-            val reply = RequestVoteResponse.newBuilder().setTerm(state.currentTerm).setVoteGranted(false).build()
-            ctx.res.onNext(reply)
-            ctx.res.onCompleted()
+            return
         }
+
+        // Reply false if client has already voted
+        if (state.lastTermVoted == ctx.req.term && state.votedFor != ctx.req.candidateID) {
+            logger.info("Denying ${ctx.req} because already voted for ${state.votedFor}")
+            ctx.res.onNext(reply.setVoteGranted(false).build())
+            ctx.res.onCompleted()
+            return
+        }
+
+        state.lastTermVoted = ctx.req.term
+        state.votedFor = ctx.req.candidateID
+        logger.info("Voting for ${ctx.req.candidateID}")
+        ctx.res.onNext(reply.setVoteGranted(true).build())
+        ctx.res.onCompleted()
     }
 
     private suspend fun startNewElection() {
         logger.info("Starting new election")
-        val term = state.currentTerm
-
         state.currentTerm++
         state.votedFor = port
 
-        val resultsFuture = clients.map {
-            val request = RequestVoteRequest.newBuilder()
-                .setCandidateID(port)
-                .setLastLogIndex(state.log.size)
-                .setLastLogTerm(state.currentTerm) // TODO: This is probably wrong
-                .setTerm(state.currentTerm)
-                .build()
-            raftStubs[it]?.requestVote(request)
-        }
-        val votesReceived = resultsFuture.map {
-            it?.await()
-        }.count { (it?.voteGranted == true) }
+        val term = state.currentTerm
 
-        electionResultsChannel.send(RaftAction.ElectionResults(votesReceived, term))
+        val votesReceived = AtomicInteger()
+
+        withContext(Dispatchers.IO) {
+            for (client in clients) {
+                launch {
+                    val request = RequestVoteRequest.newBuilder()
+                        .setCandidateID(port)
+                        .setLastLogIndex(state.log.size)
+                        .setLastLogTerm(state.currentTerm) // TODO: This is probably wrong
+                        .setTerm(state.currentTerm)
+                        .build()
+                    raftStubs[client]?.withDeadlineAfter(500, TimeUnit.MILLISECONDS)?.let { stub ->
+                        try {
+                            val response = stub.requestVote(request).await()
+                            if (response.term > state.currentTerm) {
+                                state.currentTerm = term
+                                // TODO: Should we do anything more than this?
+                            } else if (response.voteGranted) {
+                                votesReceived.incrementAndGet()
+                            }
+                        } catch (e: io.grpc.StatusRuntimeException) {
+                            logger.info("Election request to to $client timed out")
+                        }
+                    }
+                }
+            }
+        }
+
+        electionResultsChannel.send(RaftAction.ElectionResults(votesReceived.get(), term))
     }
 
     private suspend fun updateFollowers() {
-        // TODO: Send appendentries rpc to all nodes
+        coroutineScope {
+            for (client in clients) {
+                launch {
+
+                }
+            }
+        }
     }
 
     // Schema for handoff between threaded GRPC server and suspending select functions
@@ -190,6 +221,7 @@ class Raft(val port: Int, val clients: List<Int>) {
     internal data class RaftState(
         var currentTerm: Int = 0,
         var votedFor: Int? = null,
+        var lastTermVoted: Int = 0,
         var log: List<Pair<String, String>> = emptyList(),
         var commitIndex: Int = 0,
         var lastApplied: Int = 0,
