@@ -17,8 +17,14 @@ class Raft(val port: Int, val clients: List<Int>) {
     private val requestVoteChannel = Channel<RaftAction.RequestVote>(Channel.UNLIMITED)
     private val appendEntryChannel = Channel<RaftAction.AppendEntries>(Channel.UNLIMITED)
     private val electionResultsChannel = Channel<RaftAction.ElectionResults>(Channel.UNLIMITED)
+    private val setEntryChannel = Channel<ControlAction.SetEntry>(Channel.UNLIMITED)
+    private val removeEntryChannel = Channel<ControlAction.RemoveEntry>(Channel.UNLIMITED)
+    private val getEntryChannel = Channel<ControlAction.GetEntry>(Channel.UNLIMITED)
     private val server = ServerBuilder.forPort(port)
         .addService(RaftImpl(requestVoteChannel, appendEntryChannel))
+        .build()
+    private val controller = ServerBuilder.forPort(port)
+        .addService(ControllerImpl(setEntryChannel, removeEntryChannel, getEntryChannel))
         .build()
     private val raftStubs = mutableMapOf<Int, RaftGrpc.RaftFutureStub>()
     private val state = RaftState()
@@ -36,10 +42,9 @@ class Raft(val port: Int, val clients: List<Int>) {
     }
 
     suspend fun run() = coroutineScope {
-        delay((1..1000).random().toLong())
-
         logger.info("Running on port: $port")
         Thread { server.start().awaitTermination() }.start()
+        Thread { controller.start().awaitTermination() }.start()
 
         val electionTimeoutTicker = ticker(3000L)
         val leaderPingTicker = ticker(1000L)
@@ -54,10 +59,8 @@ class Raft(val port: Int, val clients: List<Int>) {
                     requestVote(message)
                 }
                 appendEntryChannel.onReceive { message ->
-                    logger.info("AppendEntries from: ${message.req.leaderID}")
                     appendEntries(message)
                     leaderTimeoutCoroutine.cancel()
-                    logger.info("Resetting leader timeout")
                     leaderTimeoutCoroutine = launch { checkForLeaderTimeout(leaderTimeoutChannel) }
                 }
                 leaderTimeoutChannel.onReceive {
@@ -74,19 +77,15 @@ class Raft(val port: Int, val clients: List<Int>) {
                     }
                 }
                 leaderPingTicker.onReceive {
-                    logger.info("Leader Ping, Role = $role")
                     if (role == RaftRole.LEADER) {
-                        logger.info("Updating Followers")
                         launch {
                             updateFollowers()
                         }
                     }
                 }
                 electionResultsChannel.onReceive { results ->
-                    logger.info("Received election results: $results")
                     if (role == RaftRole.CANDIDATE) {
                         if (results.votesReceived >= clients.size / 2.0) {
-                            logger.info("Setting to leader")
                             launch {
                                 updateFollowers()
                             }
@@ -165,7 +164,7 @@ class Raft(val port: Int, val clients: List<Int>) {
     }
 
     private suspend fun checkForLeaderTimeout(channel: Channel<Unit>) {
-        delay(5000L)
+        delay(3000L)
         channel.send(Unit)
     }
 
@@ -242,6 +241,13 @@ class Raft(val port: Int, val clients: List<Int>) {
         data class ElectionResults(val votesReceived: Int, val term: Int) : RaftAction()
     }
 
+    // Schema for the handoff between threaded controller server and suspending select functions
+    internal sealed class ControlAction {
+        data class SetEntry(val req: Entry, val res: StreamObserver<Status>) : ControlAction()
+        data class RemoveEntry(val req: Key, val res: StreamObserver<Status>) : ControlAction()
+        data class GetEntry(val req: Key, val res: StreamObserver<Entry>) : ControlAction()
+    }
+
     // Enumerate all 3 states that the raft client can be in
     internal enum class RaftRole {
         LEADER, CANDIDATE, FOLLOWER
@@ -273,6 +279,25 @@ class Raft(val port: Int, val clients: List<Int>) {
 
         override fun requestVote(request: RequestVoteRequest?, responseObserver: StreamObserver<RequestVoteResponse>?) {
             requestVoteChannel.offer(RaftAction.RequestVote(request!!, responseObserver!!))
+        }
+    }
+
+    // Runs the externally facing control interface
+    internal class ControllerImpl(
+        val setEntryChannel: Channel<ControlAction.SetEntry>,
+        val removeEntryChannel: Channel<ControlAction.RemoveEntry>,
+        val getEntryChannel: Channel<ControlAction.GetEntry>
+    ) : RaftControllerGrpc.RaftControllerImplBase() {
+        override fun setEntry(request: Entry?, responseObserver: StreamObserver<Status>?) {
+            setEntryChannel.offer(ControlAction.SetEntry(request!!, responseObserver!!))
+        }
+
+        override fun removeEntry(request: Key?, responseObserver: StreamObserver<Status>?) {
+            removeEntryChannel.offer(ControlAction.RemoveEntry(request!!, responseObserver!!))
+        }
+
+        override fun getEntry(request: Key?, responseObserver: StreamObserver<Entry>?) {
+            getEntryChannel.offer(ControlAction.GetEntry(request!!, responseObserver!!))
         }
     }
 }

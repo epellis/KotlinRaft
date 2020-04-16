@@ -6,6 +6,8 @@ option java_outer_classname = "RaftProto";
 
 package kotlinraft;
 
+import "control.proto";
+
 service Raft {
   rpc RequestVote (RequestVoteRequest) returns (RequestVoteResponse) {}
   rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse) {}
@@ -28,7 +30,7 @@ message AppendEntriesRequest {
   int32 leaderID = 2;
   int32 prevLogIndex = 3;
   int32 prevLogTerm = 4;
-  repeated string entries = 5;
+  repeated Entry entries = 5;
   int32 leaderCommit = 6;
 }
 
