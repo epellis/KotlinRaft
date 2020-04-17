@@ -7,7 +7,6 @@ option java_outer_classname = "ControlProto";
 package kotlinraft;
 
 // External API to control the raft cluster
-// TODO: Add service routing
 
 service RaftController {
   rpc SetEntry (Entry) returns (Status) {}
