@@ -2,304 +2,244 @@ package com.nedellis.kotlinraft
 
 import io.grpc.ManagedChannelBuilder
 import io.grpc.ServerBuilder
-import io.grpc.stub.StreamObserver
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.select
 import org.slf4j.LoggerFactory
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
-import kotlin.math.min
 
 class Raft(private val port: Int, private val clients: List<Int>) {
     private val stubs = mutableMapOf<Int, RaftGrpcKt.RaftCoroutineStub>()
+    private val logger = LoggerFactory.getLogger("Raft $port")
 
     init {
         for (client in clients) {
-            if (client != port) {
-                val channel = ManagedChannelBuilder.forAddress("localhost", client)
-                    .usePlaintext()
-                    .executor(Dispatchers.Default.asExecutor())
-                    .build()
-                stubs[client] = RaftGrpcKt.RaftCoroutineStub(channel)
-            }
+            val channel = ManagedChannelBuilder.forAddress("localhost", client)
+                .usePlaintext()
+                .executor(Dispatchers.Default.asExecutor())
+                .build()
+            stubs[client] = RaftGrpcKt.RaftCoroutineStub(channel)
         }
     }
 
-    @ObsoleteCoroutinesApi
     suspend fun run() = coroutineScope {
-        val raftStateActor = raftStateActor()
+        val gRPCtoCoordinatorChan = Channel<Action.Rpc>(Channel.UNLIMITED)
+
         Thread {
             ServerBuilder.forPort(port)
-                .addService(RaftService(raftStateActor))
-                .addService(ControllerService(raftStateActor))
+                .addService(RaftService(gRPCtoCoordinatorChan))
                 .build()
                 .start()
                 .awaitTermination()
         }.start()
-    }
 
-    // Manages Raft State Machine
-    // Routes messages to individual actors
-    // Handles state change between transitions
-    @ObsoleteCoroutinesApi
-    private fun CoroutineScope.raftStateActor() = actor<RaftStateActorMessage> {
-        var votingState = VotingState()
-        val logState = LogState()
-
-        var role = RaftRole.FOLLOWER
-        var roleJob = Job()
-        var roleActor: SendChannel<Any> = followerActor(logState, roleJob, channel) as SendChannel<Any>
-
-        for (msg in channel) {
-            when (msg) {
-                is RaftStateActorMessage.AppendEntries -> {
-                    if (msg.req.term > votingState.currentTerm) {
-                        channel.send(RaftStateActorMessage.ConvertToFollower)
-                        channel.send(RaftStateActorMessage.UpdateTerm(msg.req.term))
-                        channel.send(msg) // Resend message so that we can deal with it once term is updated
-                    } else if (role == RaftRole.FOLLOWER) {
-                        roleActor.send(FollowerActorMessage.AppendEntries(msg.req, msg.res))
-                    } else {
-                        val response = AppendEntriesResponse.newBuilder()
-                            .setTerm(votingState.currentTerm)
-                            .setSuccess(false)
-                            .build()
-                        msg.res.complete(response)
-                    }
-                }
-                is RaftStateActorMessage.RequestVote -> {
-                    if (msg.req.term > votingState.currentTerm) {
-                        channel.send(RaftStateActorMessage.ConvertToFollower)
-                        channel.send(RaftStateActorMessage.UpdateTerm(msg.req.term))
-                        channel.send(msg) // Resend message so that we can deal with it once term is updated
-                    } else if (votingState.votedFor == null) {
-                        channel.send(RaftStateActorMessage.UpdateVote(msg.req.candidateID))
-                        val response = RequestVoteResponse.newBuilder()
-                            .setTerm(votingState.currentTerm)
-                            .setVoteGranted(true)
-                            .build()
-                        msg.res.complete(response)
-                    } else {
-                        val response = RequestVoteResponse.newBuilder()
-                            .setTerm(votingState.currentTerm)
-                            .setVoteGranted(false)
-                            .build()
-                        msg.res.complete(response)
-                    }
-                }
-                is RaftStateActorMessage.UpdateTerm -> {
-                    votingState = VotingState(msg.currentTerm, null)
-                }
-                is RaftStateActorMessage.UpdateVote -> {
-                    votingState = VotingState(votingState.currentTerm, msg.id)
-                }
-                is RaftStateActorMessage.ConvertToLeader -> {
-                    role = RaftRole.LEADER
-                    roleJob.cancel()
-                    roleJob = Job()
-                    roleActor = leaderActor(logState, roleJob, channel) as SendChannel<Any>
-                }
-                is RaftStateActorMessage.ConvertToCandidate -> {
-                    role = RaftRole.CANDIDATE
-                    roleJob.cancel()
-                    roleJob = Job()
-                    roleActor = candidateActor(votingState, roleJob, channel) as SendChannel<Any>
-                }
-                is RaftStateActorMessage.ConvertToFollower -> {
-                    role = RaftRole.FOLLOWER
-                    roleJob.cancel()
-                    roleJob = Job()
-                    roleActor = followerActor(logState, roleJob, channel) as SendChannel<Any>
-                }
-            }
+        launch {
+            val coordinator = Coordinator().run(gRPCtoCoordinatorChan)
         }
     }
 
-    @ObsoleteCoroutinesApi
-    private fun CoroutineScope.leaderActor(logState: LogState, job: Job, parent: SendChannel<RaftStateActorMessage>) =
-        actor<LeaderActorMessage>(context = job) {
-            // Periodically update followers
-            launch {
+    internal class Coordinator : IActor<Action.Rpc> {
+        override suspend fun run(inChan: ReceiveChannel<Action.Rpc>): Job = coroutineScope {
+            return@coroutineScope launch {
+                val actorChan = Channel<Action.Rpc>(Channel.UNLIMITED) // Asynchronous
+                val stateChangeChan = Channel<StateChange>() // Synchronous
+                var actor = Follower(State()).run(actorChan, stateChangeChan)
+
                 while (true) {
-                    channel.send(LeaderActorMessage.UpdateFollowers)
-                    delay(1000L)
-                }
-            }
-
-            for (msg in channel) {
-                when (msg) {
-                    is LeaderActorMessage.AppendEntriesResult -> {
-
-                    }
-                    is LeaderActorMessage.UpdateFollowers -> {
-
-                    }
-                }
-            }
-        }
-
-    @ObsoleteCoroutinesApi
-    private fun CoroutineScope.candidateActor(
-        votingState: VotingState,
-        job: Job,
-        parent: SendChannel<RaftStateActorMessage>
-    ) =
-        actor<CandidateActorMessage>(context = job) {
-            // In 1 second, timeout voting
-            launch {
-                delay(1000L)
-                channel.send(CandidateActorMessage.VotingTimeout)
-            }
-
-            var votes = 0
-
-            for (client in clients) {
-                launch {
-                    val request = RequestVoteRequest.newBuilder()
-                        .setCandidateID(port)
-                        .setTerm(votingState.currentTerm)
-                        .build()
-                    // TODO: Set other terms
-                    val response = stubs[client]?.requestVote(request)
-                    if (response != null) {
-                        channel.send(CandidateActorMessage.RequestVotesResult(response))
-                    }
-                }
-            }
-
-            for (msg in channel) {
-                when (msg) {
-                    is CandidateActorMessage.VotingTimeout -> {
-                        when {
-                            votes > clients.size / 2.0 -> parent.send(RaftStateActorMessage.ConvertToLeader)
-                            else -> parent.send(RaftStateActorMessage.ConvertToCandidate)
-                        }
-                    }
-                    is CandidateActorMessage.RequestVotesResult -> {
-                        if (msg.res.term > votingState.currentTerm) {
-                            parent.send(RaftStateActorMessage.UpdateTerm(msg.res.term))
-                        } else if (msg.res.voteGranted) {
-                            votes++
+                    select<Unit> {
+                        inChan.onReceive {}
+                        stateChangeChan.onReceive {
+                            actor.cancel()
+                            actor = when (it) {
+                                is StateChange.ChangeToLeader -> Follower(it.state).run(actorChan, stateChangeChan)
+                                is StateChange.ChangeToCandidate -> Follower(it.state).run(actorChan, stateChangeChan)
+                                is StateChange.ChangeToFollower -> Follower(it.state).run(actorChan, stateChangeChan)
+                            }
                         }
                     }
                 }
             }
         }
+    }
 
-    @ObsoleteCoroutinesApi
-    private fun CoroutineScope.followerActor(
-        logState: LogState,
-        job: Job,
-        parent: SendChannel<RaftStateActorMessage>
-    ) =
-        actor<FollowerActorMessage>(context = job) {
-            // In 3 seconds, timeout leader if not canceled
-            var timeoutJob = Job()
-            launch(context = job) {
-                delay(3000L)
-                channel.send(FollowerActorMessage.LeaderTimeout)
-            }
+    internal class Follower(private val state: State) : IOActor<Action.Rpc, StateChange> {
+        override suspend fun run(inChan: ReceiveChannel<Action.Rpc>, outChan: SendChannel<StateChange>): Job =
+            coroutineScope {
+                return@coroutineScope launch {
+                    val ticker = ticker(3000L)
+                    var timedOut = true
 
-            for (msg in channel) {
-                when (msg) {
-                    is FollowerActorMessage.LeaderTimeout -> {
-                        parent.send(RaftStateActorMessage.ConvertToCandidate)
-                    }
-                    is FollowerActorMessage.AppendEntries -> {
-                        // Reset timeout
-                        timeoutJob.cancel()
-                        timeoutJob = Job()
-                        launch(context = job) {
-                            delay(3000L)
-                            channel.send(FollowerActorMessage.LeaderTimeout)
+                    while (true) {
+                        select<Unit> {
+                            ticker.onReceive {
+                                if (timedOut) {
+                                    outChan.send(StateChange.ChangeToCandidate(state))
+                                } else {
+                                    timedOut = true
+                                }
+                            }
+                            inChan.onReceive {
+                                when (it) {
+                                    is Action.Rpc.AppendEntries -> {
+                                        // TODO: Figure out term stuff
+                                        timedOut = false
+                                    }
+                                    is Action.Rpc.RequestVote -> {
+                                        // TODO: Figure out term stuff
+                                    }
+                                }
+                            }
                         }
-
-                        // Update Internal State TODO
-
-                        // Reply Back TODO
                     }
                 }
             }
-        }
-
-    sealed class RaftStateActorMessage {
-        data class AppendEntries(val req: AppendEntriesRequest, val res: CompletableDeferred<AppendEntriesResponse>) :
-            RaftStateActorMessage()
-
-        data class RequestVote(val req: RequestVoteRequest, val res: CompletableDeferred<RequestVoteResponse>) :
-            RaftStateActorMessage()
-
-        data class UpdateTerm(val currentTerm: Int) : RaftStateActorMessage()
-        data class UpdateVote(val id: Int) : RaftStateActorMessage()
-
-        object ConvertToFollower : RaftStateActorMessage()
-        object ConvertToCandidate : RaftStateActorMessage()
-        object ConvertToLeader : RaftStateActorMessage()
     }
 
-    sealed class LeaderActorMessage {
-        object UpdateFollowers : LeaderActorMessage()
-        data class AppendEntriesResult(val res: RequestVoteResponse) : LeaderActorMessage()
-    }
-
-    sealed class CandidateActorMessage {
-        object VotingTimeout : CandidateActorMessage()
-        data class RequestVotesResult(val res: RequestVoteResponse) : CandidateActorMessage()
-    }
-
-    sealed class FollowerActorMessage {
-        object LeaderTimeout : FollowerActorMessage()
-        data class AppendEntries(val req: AppendEntriesRequest, val res: CompletableDeferred<AppendEntriesResponse>) :
-            FollowerActorMessage()
-    }
-
-    internal data class VotingState(
+    internal data class State(
         val currentTerm: Int = 1,
-        val votedFor: Int? = null
-    )
-
-    internal data class LogState(
+        val votedFor: Int? = null,
         val log: List<Int> = listOf(),
         val commitIndex: Int = 1,
         val lastApplied: Int = 1
     )
 
-    internal data class ServerState(
-        val nextIndex: Map<Int, Int>,
-        val matchIndex: Map<Int, Int>
-    )
+    internal sealed class Action {
+        internal sealed class Rpc {
 
-    internal enum class RaftRole {
-        LEADER, CANDIDATE, FOLLOWER
+            internal data class AppendEntries(
+                val req: AppendEntriesRequest,
+                val res: CompletableDeferred<AppendEntriesResponse>
+            ) : Rpc()
+
+            internal data class RequestVote(
+                val req: RequestVoteRequest,
+                val res: CompletableDeferred<RequestVoteResponse>
+            ) :
+                Rpc()
+        }
+
     }
 
-    internal class RaftService(val actor: SendChannel<RaftStateActorMessage>) : RaftGrpcKt.RaftCoroutineImplBase() {
+    internal sealed class StateChange {
+        data class ChangeToLeader(val state: State) : StateChange()
+        data class ChangeToCandidate(val state: State) : StateChange()
+        data class ChangeToFollower(val state: State) : StateChange()
+    }
+
+    internal class RaftService(val actor: SendChannel<Action.Rpc>) : RaftGrpcKt.RaftCoroutineImplBase() {
         override suspend fun appendEntries(request: AppendEntriesRequest): AppendEntriesResponse {
             val res = CompletableDeferred<AppendEntriesResponse>()
-            actor.send(RaftStateActorMessage.AppendEntries(request, res))
+            actor.send(Action.Rpc.AppendEntries(request, res))
             return res.await()
         }
 
         override suspend fun requestVote(request: RequestVoteRequest): RequestVoteResponse {
             val res = CompletableDeferred<RequestVoteResponse>()
-            actor.send(RaftStateActorMessage.RequestVote(request, res))
+            actor.send(Action.Rpc.RequestVote(request, res))
             return res.await()
         }
     }
 
-    internal class ControllerService(val actor: SendChannel<RaftStateActorMessage>) :
-        RaftControllerGrpcKt.RaftControllerCoroutineImplBase() {
-        override suspend fun getEntry(request: Key): Entry {
-            return super.getEntry(request)
-        }
-
-        override suspend fun removeEntry(request: Key): Status {
-            return super.removeEntry(request)
-        }
-
-        override suspend fun setEntry(request: Entry): Status {
-            return super.setEntry(request)
-        }
-    }
+//    internal class ControllerService(val actor: SendChannel<RaftStateActorMessage>) :
+//        RaftControllerGrpcKt.RaftControllerCoroutineImplBase() {
+//        override suspend fun getEntry(request: Key): Entry {
+//            return super.getEntry(request)
+//        }
+//
+//        override suspend fun removeEntry(request: Key): Status {
+//            return super.removeEntry(request)
+//        }
+//
+//        override suspend fun setEntry(request: Entry): Status {
+//            return super.setEntry(request)
+//        }
+//    }
 }
+
+//
+//private class RaftManager : Parent<RaftManager.RaftRole, RaftManager.RaftState> {
+//    suspend fun run() = coroutineScope {
+//        val actor = Actor(::leaderActorRun, this@RaftManager)
+//    }
+//
+//    override fun changeToRole(role: RaftRole, state: RaftState) {
+//        TODO("Not yet implemented")
+//    }
+//
+//    internal data class RaftState(val x: Int)
+//
+//    internal enum class RaftRole {
+//        LEADER, CANDIDATE, FOLLOWER
+//    }
+//}
+//
+//private sealed class RaftActions {
+//    data class AppendEntries(val req: AppendEntriesRequest, val res: CompletableDeferred<AppendEntriesResponse>) :
+//        RaftActions()
+//
+//    data class RequestVote(val req: RequestVoteRequest, val res: CompletableDeferred<RequestVoteResponse>) :
+//        RaftActions()
+//}
+//
+//private sealed class LeaderActions : RaftActions() {
+//    object UpdateFollowers : LeaderActions()
+//}
+//
+//private sealed class CandidateActions : RaftActions() {
+//    object TimeoutElections : CandidateActions()
+//}
+//
+//private suspend fun leaderActorRun(
+//    chan: ReceiveChannel<RaftActions>,
+//    parent: Parent<RaftManager.RaftRole, RaftManager.RaftState>
+//): Unit {
+//    val state = RaftManager.RaftState(1)
+//
+//    for (msg in chan) {
+//        when (msg) {
+//            is RaftActions.AppendEntries -> {
+//            }
+//            is RaftActions.RequestVote -> {
+//            }
+//            is LeaderActions.UpdateFollowers -> {
+//            }
+//            else -> throw Exception("No action for message: $msg")
+//        }
+//    }
+//}
+//
+//private suspend fun candidateActorRun(
+//    chan: ReceiveChannel<RaftActions>,
+//    parent: Parent<RaftManager.RaftRole, RaftManager.RaftState>
+//): Unit {
+//    val state = RaftManager.RaftState(1)
+//
+//    for (msg in chan) {
+//        when (msg) {
+//            is RaftActions.AppendEntries -> {
+//            }
+//            is RaftActions.RequestVote -> {
+//            }
+//            is CandidateActions.TimeoutElections -> {
+//            }
+//            else -> throw Exception("No action for message: $msg")
+//        }
+//    }
+//}
+//
+//private suspend fun followerActorRun(
+//    chan: ReceiveChannel<RaftActions>,
+//    parent: Parent<RaftManager.RaftRole, RaftManager.RaftState>
+//): Unit {
+//    val state = RaftManager.RaftState(1)
+//
+//    for (msg in chan) {
+//        when (msg) {
+//            is RaftActions.AppendEntries -> {
+//            }
+//            is RaftActions.RequestVote -> {
+//            }
+//            else -> throw Exception("No action for message: $msg")
+//        }
+//    }
+//}
+//
