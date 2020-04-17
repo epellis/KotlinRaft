@@ -4,25 +4,39 @@ import io.grpc.ManagedChannelBuilder
 import io.grpc.ServerBuilder
 import io.grpc.stub.StreamObserver
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.channels.actor
-import kotlinx.coroutines.channels.ticker
+import kotlinx.coroutines.channels.*
 import kotlinx.coroutines.selects.select
 import org.slf4j.LoggerFactory
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
-class Raft(val port: Int, val clients: List<Int>) {
+class Raft(private val port: Int, private val clients: List<Int>) {
+    private val stubs = mutableMapOf<Int, RaftGrpcKt.RaftCoroutineStub>()
+
+    init {
+        for (client in clients) {
+            if (client != port) {
+                val channel = ManagedChannelBuilder.forAddress("localhost", client)
+                    .usePlaintext()
+                    .executor(Dispatchers.Default.asExecutor())
+                    .build()
+                stubs[client] = RaftGrpcKt.RaftCoroutineStub(channel)
+            }
+        }
+    }
+
     @ObsoleteCoroutinesApi
     suspend fun run() = coroutineScope {
         val raftStateActor = raftStateActor()
-        val server = ServerBuilder.forPort(port)
-            .addService(RaftService(raftStateActor))
-            .addService(ControllerService(raftStateActor))
-            .build()
-        Thread { server.start().awaitTermination() }
+        Thread {
+            ServerBuilder.forPort(port)
+                .addService(RaftService(raftStateActor))
+                .addService(ControllerService(raftStateActor))
+                .build()
+                .start()
+                .awaitTermination()
+        }.start()
     }
 
     // Manages Raft State Machine
@@ -30,50 +44,107 @@ class Raft(val port: Int, val clients: List<Int>) {
     // Handles state change between transitions
     @ObsoleteCoroutinesApi
     private fun CoroutineScope.raftStateActor() = actor<RaftStateActorMessage> {
-        val votingState = VotingState()
+        var votingState = VotingState()
         val logState = LogState()
 
+        var role = RaftRole.FOLLOWER
         var roleJob = Job()
-        var roleActor: SendChannel<Any> = followerActor(logState, roleJob) as SendChannel<Any>
+        var roleActor: SendChannel<Any> = followerActor(logState, roleJob, channel) as SendChannel<Any>
 
         for (msg in channel) {
             when (msg) {
                 is RaftStateActorMessage.AppendEntries -> {
                     if (msg.req.term > votingState.currentTerm) {
+                        channel.send(RaftStateActorMessage.ConvertToFollower)
+                        channel.send(RaftStateActorMessage.UpdateTerm(msg.req.term))
+                        channel.send(msg) // Resend message so that we can deal with it once term is updated
+                    } else if (role == RaftRole.FOLLOWER) {
+                        roleActor.send(FollowerActorMessage.AppendEntries(msg.req, msg.res))
+                    } else {
+                        val response = AppendEntriesResponse.newBuilder()
+                            .setTerm(votingState.currentTerm)
+                            .setSuccess(false)
+                            .build()
+                        msg.res.complete(response)
                     }
                 }
                 is RaftStateActorMessage.RequestVote -> {
-                    // TODO
+                    if (msg.req.term > votingState.currentTerm) {
+                        channel.send(RaftStateActorMessage.ConvertToFollower)
+                        channel.send(RaftStateActorMessage.UpdateTerm(msg.req.term))
+                        channel.send(msg) // Resend message so that we can deal with it once term is updated
+                    } else if (votingState.votedFor == null) {
+                        channel.send(RaftStateActorMessage.UpdateVote(msg.req.candidateID))
+                        val response = RequestVoteResponse.newBuilder()
+                            .setTerm(votingState.currentTerm)
+                            .setVoteGranted(true)
+                            .build()
+                        msg.res.complete(response)
+                    } else {
+                        val response = RequestVoteResponse.newBuilder()
+                            .setTerm(votingState.currentTerm)
+                            .setVoteGranted(false)
+                            .build()
+                        msg.res.complete(response)
+                    }
+                }
+                is RaftStateActorMessage.UpdateTerm -> {
+                    votingState = VotingState(msg.currentTerm, null)
+                }
+                is RaftStateActorMessage.UpdateVote -> {
+                    votingState = VotingState(votingState.currentTerm, msg.id)
                 }
                 is RaftStateActorMessage.ConvertToLeader -> {
+                    role = RaftRole.LEADER
                     roleJob.cancel()
                     roleJob = Job()
-                    roleActor = leaderActor(logState, roleJob) as SendChannel<Any>
+                    roleActor = leaderActor(logState, roleJob, channel) as SendChannel<Any>
                 }
                 is RaftStateActorMessage.ConvertToCandidate -> {
+                    role = RaftRole.CANDIDATE
                     roleJob.cancel()
                     roleJob = Job()
-                    roleActor = candidateActor(roleJob) as SendChannel<Any>
+                    roleActor = candidateActor(votingState, roleJob, channel) as SendChannel<Any>
                 }
                 is RaftStateActorMessage.ConvertToFollower -> {
+                    role = RaftRole.FOLLOWER
                     roleJob.cancel()
                     roleJob = Job()
-                    roleActor = followerActor(logState, roleJob) as SendChannel<Any>
+                    roleActor = followerActor(logState, roleJob, channel) as SendChannel<Any>
                 }
             }
         }
     }
 
     @ObsoleteCoroutinesApi
-    private fun CoroutineScope.leaderActor(logState: LogState, job: Job) =
+    private fun CoroutineScope.leaderActor(logState: LogState, job: Job, parent: SendChannel<RaftStateActorMessage>) =
         actor<LeaderActorMessage>(context = job) {
-            for (msg in channel) {
+            // Periodically update followers
+            launch {
+                while (true) {
+                    channel.send(LeaderActorMessage.UpdateFollowers)
+                    delay(1000L)
+                }
+            }
 
+            for (msg in channel) {
+                when (msg) {
+                    is LeaderActorMessage.AppendEntriesResult -> {
+
+                    }
+                    is LeaderActorMessage.UpdateFollowers -> {
+
+                    }
+                }
             }
         }
 
     @ObsoleteCoroutinesApi
-    private fun CoroutineScope.candidateActor(job: Job) =
+    private fun CoroutineScope.candidateActor(
+        votingState: VotingState,
+        job: Job,
+        parent: SendChannel<RaftStateActorMessage>
+    ) =
         actor<CandidateActorMessage>(context = job) {
             // In 1 second, timeout voting
             launch {
@@ -81,16 +152,74 @@ class Raft(val port: Int, val clients: List<Int>) {
                 channel.send(CandidateActorMessage.VotingTimeout)
             }
 
-            for (msg in channel) {
+            var votes = 0
 
+            for (client in clients) {
+                launch {
+                    val request = RequestVoteRequest.newBuilder()
+                        .setCandidateID(port)
+                        .setTerm(votingState.currentTerm)
+                        .build()
+                    // TODO: Set other terms
+                    val response = stubs[client]?.requestVote(request)
+                    if (response != null) {
+                        channel.send(CandidateActorMessage.RequestVotesResult(response))
+                    }
+                }
+            }
+
+            for (msg in channel) {
+                when (msg) {
+                    is CandidateActorMessage.VotingTimeout -> {
+                        when {
+                            votes > clients.size / 2.0 -> parent.send(RaftStateActorMessage.ConvertToLeader)
+                            else -> parent.send(RaftStateActorMessage.ConvertToCandidate)
+                        }
+                    }
+                    is CandidateActorMessage.RequestVotesResult -> {
+                        if (msg.res.term > votingState.currentTerm) {
+                            parent.send(RaftStateActorMessage.UpdateTerm(msg.res.term))
+                        } else if (msg.res.voteGranted) {
+                            votes++
+                        }
+                    }
+                }
             }
         }
 
     @ObsoleteCoroutinesApi
-    private fun CoroutineScope.followerActor(logState: LogState, job: Job) =
+    private fun CoroutineScope.followerActor(
+        logState: LogState,
+        job: Job,
+        parent: SendChannel<RaftStateActorMessage>
+    ) =
         actor<FollowerActorMessage>(context = job) {
-            for (msg in channel) {
+            // In 3 seconds, timeout leader if not canceled
+            var timeoutJob = Job()
+            launch(context = job) {
+                delay(3000L)
+                channel.send(FollowerActorMessage.LeaderTimeout)
+            }
 
+            for (msg in channel) {
+                when (msg) {
+                    is FollowerActorMessage.LeaderTimeout -> {
+                        parent.send(RaftStateActorMessage.ConvertToCandidate)
+                    }
+                    is FollowerActorMessage.AppendEntries -> {
+                        // Reset timeout
+                        timeoutJob.cancel()
+                        timeoutJob = Job()
+                        launch(context = job) {
+                            delay(3000L)
+                            channel.send(FollowerActorMessage.LeaderTimeout)
+                        }
+
+                        // Update Internal State TODO
+
+                        // Reply Back TODO
+                    }
+                }
             }
         }
 
@@ -100,6 +229,9 @@ class Raft(val port: Int, val clients: List<Int>) {
 
         data class RequestVote(val req: RequestVoteRequest, val res: CompletableDeferred<RequestVoteResponse>) :
             RaftStateActorMessage()
+
+        data class UpdateTerm(val currentTerm: Int) : RaftStateActorMessage()
+        data class UpdateVote(val id: Int) : RaftStateActorMessage()
 
         object ConvertToFollower : RaftStateActorMessage()
         object ConvertToCandidate : RaftStateActorMessage()
