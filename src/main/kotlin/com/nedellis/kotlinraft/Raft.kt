@@ -10,6 +10,7 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.ticker
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import org.slf4j.LoggerFactory
@@ -39,9 +40,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                 .awaitTermination()
         }.start()
 
-        launch {
-            val coordinator = Coordinator().run(gRPCtoCoordinatorChan)
-        }
+        Coordinator().run(gRPCtoCoordinatorChan)
     }
 
     private inner class Coordinator : IActor<Rpc> {
@@ -50,32 +49,30 @@ class Raft(private val port: Int, private val clients: List<Int>) {
 
             val actorChan = Channel<Rpc>(Channel.UNLIMITED) // Asynchronous
             val stateChangeChan = Channel<ChangeRole>() // Synchronous
-            var actor = launch { Follower(State()).run(actorChan, stateChangeChan) }
+            var actor = launch { Follower(State(id = port)).run(actorChan, stateChangeChan) }
 
             while (true) {
-                logger.info("LOOP")
                 select<Unit> {
                     inChan.onReceive {
-                        logger.info("Dispatching Message: $it")
                         actorChan.send(it)
                     }
                     stateChangeChan.onReceive {
-                        logger.info("Canceling actor with state: $it")
+                        logger.info("Canceling actor with state: ${it.state}, switch to ${it.role}")
                         actor.cancel()
-//                        actor = when (it.role) {
-//                            Role.LEADER -> launch {
-//                                Leader(it.state).run(actorChan, stateChangeChan)
-//                            }
-//                            Role.CANDIDATE -> launch {
-//                                Candidate(it.state).run(actorChan, stateChangeChan)
-//                            }
-//                            Role.FOLLOWER -> launch {
-//                                Follower(it.state).run(actorChan, stateChangeChan)
-//                            }
-//                        }
-//                        if (it.msg != null) {
-//                            actorChan.send(it.msg)
-//                        }
+                        actor = when (it.role) {
+                            Role.LEADER -> launch {
+                                Leader(it.state).run(actorChan, stateChangeChan)
+                            }
+                            Role.CANDIDATE -> launch {
+                                Candidate(it.state).run(actorChan, stateChangeChan)
+                            }
+                            Role.FOLLOWER -> launch {
+                                Follower(it.state).run(actorChan, stateChangeChan)
+                            }
+                        }
+                        if (it.msg != null) {
+                            actorChan.send(it.msg)
+                        }
                     }
                 }
             }
@@ -87,13 +84,35 @@ class Raft(private val port: Int, private val clients: List<Int>) {
             coroutineScope {
                 logger.info("Starting leader")
 
+                val ticker = ticker(1000L)
+                val responses = Channel<AppendResponse>()
+
                 while (true) {
                     select<Unit> {
+                        ticker.onReceive {
+                            for ((client, stub) in stubs) {
+                                if (client != port) {
+                                    launch {
+                                        val req = AppendRequest.newBuilder()
+                                            .setTerm(state.currentTerm)
+                                            .build()
+                                        // TODO: Add other fields
+                                        responses.send(stub.append(req))
+                                    }
+                                }
+                            }
+                        }
+                        responses.onReceive {
+                            it.convertIfTermHigher(state, outChan)
+                            TODO()
+                        }
                         inChan.onReceive {
                             when (it) {
                                 is Rpc.AppendEntries -> {
+                                    it.convertIfTermHigher(state, outChan)
                                 }
                                 is Rpc.RequestVote -> {
+                                    it.vote(Role.LEADER, state, outChan)
                                 }
                             }
                         }
@@ -107,8 +126,13 @@ class Raft(private val port: Int, private val clients: List<Int>) {
             coroutineScope {
                 logger.info("Starting candidate")
 
-                val timeout = ticker(1000L)
+                val timeout = Channel<Unit>()
                 val responses = Channel<VoteResponse>()
+
+                launch {
+                    delay((1000..3000).random().toLong()) // Delay a random amount before timing out
+                    timeout.send(Unit)
+                }
 
                 for ((client, stub) in stubs) {
                     if (client != port) {
@@ -129,17 +153,18 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                 while (true) {
                     select<Unit> {
                         timeout.onReceive {
-                            if (votesGranted > stubs.size / 2.0) {
-                                outChan.send(ChangeRole(Role.LEADER, state, null))
-                            } else {
-                                val nextState = state.copy(currentTerm = state.currentTerm + 1, votedFor = port)
-                                outChan.send(ChangeRole(Role.CANDIDATE, nextState, null))
-                            }
+                            val nextState = state.copy(currentTerm = state.currentTerm + 1, votedFor = state.id)
+                            outChan.send(ChangeRole(Role.CANDIDATE, nextState, null))
                         }
                         responses.onReceive {
+                            logger.info("Vote Response: ${it.voteGranted}")
                             it.convertIfTermHigher(state, outChan)
                             if (it.voteGranted) {
                                 votesGranted++
+                            }
+                            logger.info("Now have $votesGranted votes in term ${state.currentTerm}")
+                            if (votesGranted > stubs.size / 2.0) {
+                                outChan.send(ChangeRole(Role.LEADER, state, null))
                             }
                         }
                         inChan.onReceive {
@@ -148,7 +173,6 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                                     it.convertIfTermHigher(state, outChan)
                                 }
                                 is Rpc.RequestVote -> {
-                                    it.convertIfTermHigher(state, outChan)
                                     it.vote(Role.CANDIDATE, state, outChan)
                                 }
                             }
@@ -171,7 +195,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                         ticker.onReceive {
                             logger.info("Follower Timed Out")
                             if (timedOut) {
-                                val nextState = state.copy(currentTerm = state.currentTerm + 1, votedFor = port)
+                                val nextState = state.copy(currentTerm = state.currentTerm + 1, votedFor = state.id)
                                 outChan.send(ChangeRole(Role.CANDIDATE, nextState, null))
                             } else {
                                 timedOut = true
@@ -187,7 +211,6 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                                     timedOut = false
                                 }
                                 is Rpc.RequestVote -> {
-                                    it.convertIfTermHigher(state, outChan)
                                     it.vote(Role.FOLLOWER, state, outChan)
                                 }
                             }
@@ -198,6 +221,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
     }
 
     private data class State(
+        val id: Int = 1,
         val currentTerm: Int = 1,
         val votedFor: Int? = null,
         val log: List<Int> = listOf(),
@@ -211,14 +235,16 @@ class Raft(private val port: Int, private val clients: List<Int>) {
 
     private suspend fun AppendResponse.convertIfTermHigher(state: State, supervisorChan: SendChannel<ChangeRole>) {
         if (term > state.currentTerm) {
-            val nextState = state.copy(currentTerm = term)
+            logger.info("AppendResponse has term of $term I have term of ${state.currentTerm}")
+            val nextState = state.copy(currentTerm = term, votedFor = null)
             supervisorChan.send(ChangeRole(Role.FOLLOWER, nextState, null))
         }
     }
 
     private suspend fun VoteResponse.convertIfTermHigher(state: State, supervisorChan: SendChannel<ChangeRole>) {
         if (term > state.currentTerm) {
-            val nextState = state.copy(currentTerm = term)
+            logger.info("VoteResponse has term of $term I have term of ${state.currentTerm}")
+            val nextState = state.copy(currentTerm = term, votedFor = null)
             supervisorChan.send(ChangeRole(Role.FOLLOWER, nextState, null))
         }
     }
@@ -230,7 +256,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         ) : Rpc(), TermChecked {
             override suspend fun convertIfTermHigher(state: State, supervisorChan: SendChannel<ChangeRole>) {
                 if (req.term > state.currentTerm) {
-                    val nextState = state.copy(currentTerm = req.term)
+                    val nextState = state.copy(currentTerm = req.term, votedFor = null)
                     supervisorChan.send(ChangeRole(Role.FOLLOWER, nextState, this))
                 }
             }
@@ -242,34 +268,50 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         ) : Rpc(), TermChecked {
             override suspend fun convertIfTermHigher(state: State, supervisorChan: SendChannel<ChangeRole>) {
                 if (req.term > state.currentTerm) {
-                    val nextState = state.copy(currentTerm = req.term)
+                    val nextState = state.copy(currentTerm = req.term, votedFor = null)
                     supervisorChan.send(ChangeRole(Role.FOLLOWER, nextState, this))
                 }
             }
 
             suspend fun vote(currentRole: Role, state: State, supervisorChan: SendChannel<ChangeRole>) {
-                val response = VoteResponse.newBuilder().setTerm(state.currentTerm)
+                val logger = LoggerFactory.getLogger("Raft ${state.id}")
+                let {
+                    val response = VoteResponse.newBuilder()
+                        .setTerm(state.currentTerm)
+                        .setVoteGranted(false)
+                        .build()
 
-                // Reply false if term < currentTerm
-                if (req.term < state.currentTerm) {
-                    response.voteGranted = false
-                    res.complete(response.build())
-                    return
+                    logger.info("Processing vote for ${req.candidateID}, term: ${req.term}, my state: $state")
+
+                    // Reply false if term < currentTerm
+                    if (req.term < state.currentTerm) {
+                        logger.info("Denying vote because their term of ${req.term} is less than my term of ${state.currentTerm}")
+                        res.complete(response)
+                        return
+                    }
+
+                    // Reply false if already voted for another candidate this term
+                    if (state.currentTerm == req.term && state.votedFor != null && state.votedFor != req.candidateID) {
+                        logger.info("Denying vote because already voted for ${state.votedFor}")
+                        res.complete(response)
+                        return
+                    }
+
+                    // TODO: Check Log
                 }
 
-                // Reply false if already voted for another candidate this term
-                if (state.votedFor != null && state.votedFor != req.term) {
-                    response.voteGranted = false
-                    res.complete(response.build())
+                let {
+                    val response = VoteResponse.newBuilder()
+                        .setTerm(state.currentTerm)
+                        .setVoteGranted(true)
+                        .build()
+
+                    logger.info("Term ${state.currentTerm} voting for: ${req.candidateID}")
+                    res.complete(response)
+
+                    val nextState = state.copy(votedFor = req.candidateID, currentTerm = req.term)
+                    supervisorChan.send(ChangeRole(currentRole, nextState, null))
                 }
-
-                // TODO: Check Log
-
-                response.voteGranted = true
-                res.complete(response.build())
-
-                val nextState = state.copy(votedFor = req.candidateID)
-                supervisorChan.send(ChangeRole(currentRole, nextState, null))
             }
         }
     }
