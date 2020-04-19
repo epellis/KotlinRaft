@@ -12,7 +12,7 @@ class RunRaft : CliktCommand() {
     val clients: Int by option(help = "Number of raft clients to run").int().default(3)
 
     override fun run() {
-        System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "INFO");
+        System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "INFO")
 
         val clients = (port until port + clients).toList()
         val rafts = clients.map {

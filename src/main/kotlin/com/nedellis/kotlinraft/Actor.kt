@@ -1,7 +1,7 @@
 package com.nedellis.kotlinraft
 
-import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.*
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.SendChannel
 
 // Input and Output Actor
 interface IOActor<in I, out O> {
