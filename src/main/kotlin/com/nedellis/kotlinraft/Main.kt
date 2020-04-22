@@ -4,6 +4,7 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.int
+import kotlinx.coroutines.ObsoleteCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
@@ -11,6 +12,7 @@ class RunRaft : CliktCommand() {
     val port: Int by option(help = "Starting port to run off of").int().default(8000)
     val clients: Int by option(help = "Number of raft clients to run").int().default(3)
 
+    @ObsoleteCoroutinesApi
     override fun run() {
         System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "INFO")
 

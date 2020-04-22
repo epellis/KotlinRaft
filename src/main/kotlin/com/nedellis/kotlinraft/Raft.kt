@@ -2,33 +2,26 @@ package com.nedellis.kotlinraft
 
 import io.grpc.ManagedChannelBuilder
 import io.grpc.ServerBuilder
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.asExecutor
+import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.ticker
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import org.slf4j.LoggerFactory
 
 class Raft(private val port: Int, private val clients: List<Int>) {
-    private val stubs = mutableMapOf<Int, RaftGrpcKt.RaftCoroutineStub>()
+    private val stubs = clients.map { it ->
+        it to RaftGrpcKt.RaftCoroutineStub(
+            ManagedChannelBuilder.forAddress("localhost", it)
+                .usePlaintext()
+                .executor(Dispatchers.IO.asExecutor())
+                .build()
+        )
+    }.toMap()
     private val logger = LoggerFactory.getLogger("Raft $port")
 
-    init {
-        for (client in clients) {
-            val channel = ManagedChannelBuilder.forAddress("localhost", client)
-                .usePlaintext()
-                .executor(Dispatchers.Default.asExecutor())
-                .build()
-            stubs[client] = RaftGrpcKt.RaftCoroutineStub(channel)
-        }
-    }
-
+    @ObsoleteCoroutinesApi
     suspend fun run() = coroutineScope {
         val gRPCtoCoordinatorChan = Channel<Rpc>(Channel.UNLIMITED)
 
@@ -44,6 +37,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
     }
 
     private inner class Coordinator : IActor<Rpc> {
+        @ObsoleteCoroutinesApi
         override suspend fun run(inChan: ReceiveChannel<Rpc>) = coroutineScope {
             logger.info("Starting coordinator")
 
@@ -80,6 +74,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
     }
 
     private inner class Leader(private val state: State) : IOActor<Rpc, ChangeRole> {
+        @ObsoleteCoroutinesApi
         override suspend fun run(inChan: ReceiveChannel<Rpc>, outChan: SendChannel<ChangeRole>) =
             coroutineScope {
                 logger.info("Starting leader")
@@ -93,6 +88,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                             for ((client, stub) in stubs) {
                                 if (client != port) {
                                     launch {
+                                        logger.info("Sending AppendRequest to $client")
                                         val req = AppendRequest.newBuilder()
                                             .setTerm(state.currentTerm)
                                             .build()
@@ -104,12 +100,15 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                         }
                         responses.onReceive {
                             it.convertIfTermHigher(state, outChan)
-                            TODO()
+                            TODO("If term is ok")
                         }
                         inChan.onReceive {
                             when (it) {
                                 is Rpc.AppendEntries -> {
                                     it.convertIfTermHigher(state, outChan)
+                                    if (it.denyIfTermLower(state)) {
+                                        return@onReceive
+                                    }
                                 }
                                 is Rpc.RequestVote -> {
                                     it.vote(Role.LEADER, state, outChan)
@@ -171,6 +170,11 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                             when (it) {
                                 is Rpc.AppendEntries -> {
                                     it.convertIfTermHigher(state, outChan)
+                                    if (it.denyIfTermLower(state)) {
+                                        return@onReceive
+                                    }
+
+                                    outChan.send(ChangeRole(Role.FOLLOWER, state, null))
                                 }
                                 is Rpc.RequestVote -> {
                                     it.vote(Role.CANDIDATE, state, outChan)
@@ -187,28 +191,34 @@ class Raft(private val port: Int, private val clients: List<Int>) {
             coroutineScope {
                 logger.info("Starting follower")
 
-                val ticker = ticker(3000L)
-                var timedOut = true
+                val timeoutChan = Channel<Unit>()
+                var timeoutJob = launch {
+                    delay(3000L)
+                    timeoutChan.send(Unit)
+                }
 
                 while (true) {
                     select<Unit> {
-                        ticker.onReceive {
+                        timeoutChan.onReceive {
                             logger.info("Follower Timed Out")
-                            if (timedOut) {
-                                val nextState = state.copy(currentTerm = state.currentTerm + 1, votedFor = state.id)
-                                outChan.send(ChangeRole(Role.CANDIDATE, nextState, null))
-                            } else {
-                                timedOut = true
-                            }
+                            val nextState = state.copy(currentTerm = state.currentTerm + 1, votedFor = state.id)
+                            outChan.send(ChangeRole(Role.CANDIDATE, nextState, null))
                         }
                         inChan.onReceive {
                             when (it) {
                                 is Rpc.AppendEntries -> {
                                     it.convertIfTermHigher(state, outChan)
+                                    if (it.denyIfTermLower(state)) {
+                                        return@onReceive
+                                    }
 
                                     // TODO: Update log
 
-                                    timedOut = false
+                                    timeoutJob.cancel()
+                                    timeoutJob = launch {
+                                        delay(3000L)
+                                        timeoutChan.send(Unit)
+                                    }
                                 }
                                 is Rpc.RequestVote -> {
                                     it.vote(Role.FOLLOWER, state, outChan)
@@ -259,6 +269,18 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                     val nextState = state.copy(currentTerm = req.term, votedFor = null)
                     supervisorChan.send(ChangeRole(Role.FOLLOWER, nextState, this))
                 }
+            }
+
+            suspend fun denyIfTermLower(state: State): Boolean {
+                if (req.term < state.currentTerm) {
+                    val response = AppendResponse.newBuilder()
+                        .setSuccess(false)
+                        .setTerm(state.currentTerm)
+                        .build()
+                    res.complete(response)
+                }
+
+                return (req.term < state.currentTerm)
             }
         }
 
