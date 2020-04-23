@@ -1,5 +1,6 @@
 package com.nedellis.kotlinraft
 
+// ktlint-disable no-wildcard-imports
 import io.grpc.ManagedChannelBuilder
 import io.grpc.ServerBuilder
 import kotlinx.coroutines.*
