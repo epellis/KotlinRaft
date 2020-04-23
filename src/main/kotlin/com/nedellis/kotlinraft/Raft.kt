@@ -1,6 +1,5 @@
 package com.nedellis.kotlinraft
 
-// ktlint-disable no-wildcard-imports
 import io.grpc.ManagedChannelBuilder
 import io.grpc.ServerBuilder
 import kotlinx.coroutines.*
@@ -29,6 +28,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         Thread {
             ServerBuilder.forPort(port)
                 .addService(RaftService(gRPCtoCoordinatorChan))
+                .addService(ControlService(gRPCtoCoordinatorChan))
                 .build()
                 .start()
                 .awaitTermination()
@@ -179,6 +179,15 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                                 }
                                 is Rpc.RequestVote -> {
                                     it.vote(Role.CANDIDATE, state, outChan)
+                                }
+                                is Rpc.SetEntry -> {
+                                    it.replyUnavailable()
+                                }
+                                is Rpc.RemoveEntry -> {
+                                    it.replyUnavailable()
+                                }
+                                is Rpc.GetEntry -> {
+                                    it.replyUnavailable()
                                 }
                             }
                         }
@@ -337,6 +346,27 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                 }
             }
         }
+
+        data class SetEntry(val req: Entry, val res: CompletableDeferred<SetStatus>) : Rpc() {
+            suspend fun replyUnavailable() {
+                val response = SetStatus.newBuilder().setStatus(SetStatus.Status.UNAVAILABLE).build()
+                res.complete(response)
+            }
+        }
+
+        data class RemoveEntry(val req: Key, val res: CompletableDeferred<RemoveStatus>) : Rpc() {
+            suspend fun replyUnavailable() {
+                val response = RemoveStatus.newBuilder().setStatus(RemoveStatus.Status.UNAVAILABLE).build()
+                res.complete(response)
+            }
+        }
+
+        data class GetEntry(val req: Key, val res: CompletableDeferred<GetStatus>) : Rpc() {
+            suspend fun replyUnavailable() {
+                val response = GetStatus.newBuilder().setStatus(GetStatus.Status.UNAVAILABLE).build()
+                res.complete(response)
+            }
+        }
     }
 
     private data class ChangeRole(val role: Role, val state: State, val msg: Rpc?)
@@ -355,6 +385,26 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         override suspend fun vote(request: VoteRequest): VoteResponse {
             val res = CompletableDeferred<VoteResponse>()
             actor.send(Rpc.RequestVote(request, res))
+            return res.await()
+        }
+    }
+
+    private class ControlService(val actor: SendChannel<Rpc>) : RaftControllerGrpcKt.RaftControllerCoroutineImplBase() {
+        override suspend fun getEntry(request: Key): GetStatus {
+            val res = CompletableDeferred<GetStatus>()
+            actor.send(Rpc.GetEntry(request, res))
+            return res.await()
+        }
+
+        override suspend fun removeEntry(request: Key): RemoveStatus {
+            val res = CompletableDeferred<RemoveStatus>()
+            actor.send(Rpc.RemoveEntry(request, res))
+            return res.await()
+        }
+
+        override suspend fun setEntry(request: Entry): SetStatus {
+            val res = CompletableDeferred<SetStatus>()
+            actor.send(Rpc.SetEntry(request, res))
             return res.await()
         }
     }

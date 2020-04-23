@@ -9,9 +9,9 @@ package kotlinraft;
 // External API to control the raft cluster
 
 service RaftController {
-  rpc SetEntry (Entry) returns (Status) {}
-  rpc RemoveEntry (Key) returns (Status) {}
-  rpc GetEntry (Key) returns (Entry) {} // If nothing at key found, entry will be uninitialized
+  rpc SetEntry (Entry) returns (SetStatus) {}
+  rpc RemoveEntry (Key) returns (RemoveStatus) {}
+  rpc GetEntry (Key) returns (GetStatus) {} // If nothing at key found, entry will be uninitialized
 }
 
 message Entry {
@@ -23,6 +23,29 @@ message Key {
   string key = 1;
 }
 
-message Status {
-  bool success = 1;
+message SetStatus {
+  enum Status {
+    OK = 0;
+    UNAVAILABLE = 1;
+  }
+  Status status = 1;
+}
+
+message RemoveStatus {
+  enum Status {
+    OK = 0;
+    NOT_FOUND = 1;
+    UNAVAILABLE = 2;
+  }
+  Status status = 1;
+}
+
+message GetStatus {
+  enum Status {
+    OK = 0;
+    NOT_FOUND = 1;
+    UNAVAILABLE = 3;
+  }
+  Status status = 1;
+  Entry entry = 2;
 }
