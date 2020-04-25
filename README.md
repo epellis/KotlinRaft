@@ -17,3 +17,11 @@ $ ./gradlew run
 # Jar (Found in ./build/libs/)
 $ ./gradlew shadowJar
 ```
+
+## gRPC Web Proxy
+In order to connect the dashboard to the raft cluster we will need to run an intermediary proxy that translates
+regular gRPC to gRPC-web. [Download an executable](https://github.com/improbable-eng/grpc-web/releases) and
+run with the following commands:
+```bash
+./grpcwebproxy --backend_addr=localhost:8000 --run_tls_server=false
+```

@@ -17,12 +17,11 @@ class RunRaft : CliktCommand() {
     override fun run() {
         System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "INFO")
 
-        runDashboard(dashPort)
-
         val clients = (port until port + clients).toList()
         val rafts = clients.map {
             Raft(it, clients)
         }
+
         runBlocking {
             for (raft in rafts) {
                 launch {

@@ -8,7 +8,7 @@ package kotlinraft;
 
 // External API to control the raft cluster
 
-service RaftController {
+service Control {
   rpc SetEntry (Entry) returns (SetStatus) {}
   rpc RemoveEntry (Key) returns (RemoveStatus) {}
   rpc GetEntry (Key) returns (GetStatus) {} // If nothing at key found, entry will be uninitialized

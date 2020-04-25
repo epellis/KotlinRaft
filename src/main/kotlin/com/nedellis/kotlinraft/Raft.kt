@@ -11,7 +11,7 @@ import kotlinx.coroutines.selects.select
 import org.slf4j.LoggerFactory
 
 class Raft(private val port: Int, private val clients: List<Int>) {
-    private val stubs = clients.map { it ->
+    private val raftStubs = clients.map { it ->
         it to RaftGrpcKt.RaftCoroutineStub(
             ManagedChannelBuilder.forAddress("localhost", it)
                 .usePlaintext()
@@ -19,6 +19,16 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                 .build()
         )
     }.toMap()
+
+    private val controlStubs = clients.map { it ->
+        it to ControlGrpcKt.ControlCoroutineStub(
+            ManagedChannelBuilder.forAddress("localhost", it)
+                .usePlaintext()
+                .executor(Dispatchers.IO.asExecutor())
+                .build()
+        )
+    }.toMap()
+
     private val logger = LoggerFactory.getLogger("Raft $port")
 
     @ObsoleteCoroutinesApi
@@ -86,7 +96,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                 while (true) {
                     select<Unit> {
                         ticker.onReceive {
-                            for ((client, stub) in stubs) {
+                            for ((client, stub) in raftStubs) {
                                 if (client != port) {
                                     launch {
                                         logger.info("Sending AppendRequest to $client")
@@ -114,6 +124,15 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                                 is Rpc.RequestVote -> {
                                     it.vote(Role.LEADER, state, outChan)
                                 }
+                                is Rpc.SetEntry -> {
+                                    it.replyUnavailable()
+                                }
+                                is Rpc.RemoveEntry -> {
+                                    it.replyUnavailable()
+                                }
+                                is Rpc.GetEntry -> {
+                                    it.replyUnavailable()
+                                }
                             }
                         }
                     }
@@ -134,7 +153,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                     timeout.send(Unit)
                 }
 
-                for ((client, stub) in stubs) {
+                for ((client, stub) in raftStubs) {
                     if (client != port) {
                         launch {
                             val req = VoteRequest.newBuilder()
@@ -163,7 +182,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                                 votesGranted++
                             }
                             logger.info("Now have $votesGranted votes in term ${state.currentTerm}")
-                            if (votesGranted > stubs.size / 2.0) {
+                            if (votesGranted > raftStubs.size / 2.0) {
                                 outChan.send(ChangeRole(Role.LEADER, state, null))
                             }
                         }
@@ -232,6 +251,30 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                                 }
                                 is Rpc.RequestVote -> {
                                     it.vote(Role.FOLLOWER, state, outChan)
+                                }
+                                is Rpc.SetEntry -> {
+                                    val leaderStub = controlStubs[state.votedFor]
+                                    if (leaderStub == null) {
+                                        it.replyUnavailable()
+                                    } else {
+                                        it.forwardToLeader(leaderStub)
+                                    }
+                                }
+                                is Rpc.RemoveEntry -> {
+                                    val leaderStub = controlStubs[state.votedFor]
+                                    if (leaderStub == null) {
+                                        it.replyUnavailable()
+                                    } else {
+                                        it.forwardToLeader(leaderStub)
+                                    }
+                                }
+                                is Rpc.GetEntry -> {
+                                    val leaderStub = controlStubs[state.votedFor]
+                                    if (leaderStub == null) {
+                                        it.replyUnavailable()
+                                    } else {
+                                        it.forwardToLeader(leaderStub)
+                                    }
                                 }
                             }
                         }
@@ -348,23 +391,35 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         }
 
         data class SetEntry(val req: Entry, val res: CompletableDeferred<SetStatus>) : Rpc() {
-            suspend fun replyUnavailable() {
+            fun replyUnavailable() {
                 val response = SetStatus.newBuilder().setStatus(SetStatus.Status.UNAVAILABLE).build()
                 res.complete(response)
+            }
+
+            suspend fun forwardToLeader(stub: ControlGrpcKt.ControlCoroutineStub) {
+                res.complete(stub.setEntry(req))
             }
         }
 
         data class RemoveEntry(val req: Key, val res: CompletableDeferred<RemoveStatus>) : Rpc() {
-            suspend fun replyUnavailable() {
+            fun replyUnavailable() {
                 val response = RemoveStatus.newBuilder().setStatus(RemoveStatus.Status.UNAVAILABLE).build()
                 res.complete(response)
+            }
+
+            suspend fun forwardToLeader(stub: ControlGrpcKt.ControlCoroutineStub) {
+                res.complete(stub.removeEntry(req))
             }
         }
 
         data class GetEntry(val req: Key, val res: CompletableDeferred<GetStatus>) : Rpc() {
-            suspend fun replyUnavailable() {
+            fun replyUnavailable() {
                 val response = GetStatus.newBuilder().setStatus(GetStatus.Status.UNAVAILABLE).build()
                 res.complete(response)
+            }
+
+            suspend fun forwardToLeader(stub: ControlGrpcKt.ControlCoroutineStub) {
+                res.complete(stub.getEntry(req))
             }
         }
     }
@@ -389,7 +444,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         }
     }
 
-    private class ControlService(val actor: SendChannel<Rpc>) : RaftControllerGrpcKt.RaftControllerCoroutineImplBase() {
+    private class ControlService(val actor: SendChannel<Rpc>) : ControlGrpcKt.ControlCoroutineImplBase() {
         override suspend fun getEntry(request: Key): GetStatus {
             val res = CompletableDeferred<GetStatus>()
             actor.send(Rpc.GetEntry(request, res))
