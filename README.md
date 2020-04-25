@@ -18,10 +18,18 @@ $ ./gradlew run
 $ ./gradlew shadowJar
 ```
 
-## gRPC Web Proxy
-In order to connect the dashboard to the raft cluster we will need to run an intermediary proxy that translates
-regular gRPC to gRPC-web. [Download an executable](https://github.com/improbable-eng/grpc-web/releases) and
-run with the following commands:
+## Envoy
+Unfortunately gRPC-web does not have in-process support for most langauges
+so we have to use [Envoy](https://www.envoyproxy.io/) as a proxy between web clients and our backend
+service. To start envoy, run;
 ```bash
-./grpcwebproxy --backend_addr=localhost:8000 --run_tls_server=false
+$ cd envoy
+
+$ docker build -t epelesis/envoy -f ./envoy.Dockerfile .
+
+$ docker run -d -p 8080:8080 epelesis/envoy
 ```
+Since this section relies on the fine details of Docker networking, if you are not
+on MacOS you might need to check on the 
+[official tutorial](https://github.com/grpc/grpc-web/tree/master/net/grpc/gateway/examples/helloworld)
+to solve issues with proxying.
