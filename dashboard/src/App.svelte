@@ -13,6 +13,15 @@
       <div class="column">
         <RaftClient client={{ url: 'http://localhost:8000' }} />
       </div>
+      <div class="column">
+        <RaftClient client={{ url: 'http://localhost:8001' }} />
+      </div>
+      <div class="column">
+        <RaftClient client={{ url: 'http://localhost:8002' }} />
+      </div>
+      <div class="column">
+        <RaftClient client={{ url: 'http://localhost:8003' }} />
+      </div>
     </div>
   </div>
 </section>
