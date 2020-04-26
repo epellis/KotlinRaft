@@ -1,19 +1,20 @@
 <script>
   export let client;
   const { Entry, SetStatus } = require("./control_pb.js");
-  const { ControlClient } = require("./control_grpc_web_pb.js");
-  const stub = new ControlClient(client.url, null, null);
+  const { ControlPromiseClient } = require("./control_grpc_web_pb.js");
+  const stub = new ControlPromiseClient(client.url, null, null);
 
   let entryKey = "";
   let entryValue = "";
 
   async function setEntry() {
     console.log(`Setting Key=${entryKey}, Value=${entryValue}`);
-    let request = new Entry();
+    const request = new Entry();
     request.setKey(entryKey);
     request.setValue(entryValue);
     const res = await stub.setEntry(request, {});
-    console.log(res.getStatus());
+    const status = res.getStatus() == SetStatus.Status.OK;
+    console.log(`Status: ${status}`);
   }
 </script>
 

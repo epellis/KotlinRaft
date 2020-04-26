@@ -125,6 +125,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                                     it.vote(Role.LEADER, state, outChan)
                                 }
                                 is Rpc.SetEntry -> {
+                                    logger.info("Processing set unavailable")
                                     it.replyUnavailable()
                                 }
                                 is Rpc.RemoveEntry -> {
