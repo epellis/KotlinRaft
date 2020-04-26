@@ -99,7 +99,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                             for ((client, stub) in raftStubs) {
                                 if (client != port) {
                                     launch {
-                                        logger.info("Sending AppendRequest to $client")
+//                                        logger.info("Sending AppendRequest to $client")
                                         val req = AppendRequest.newBuilder()
                                             .setTerm(state.currentTerm)
                                             .build()

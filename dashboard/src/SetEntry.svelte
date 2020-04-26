@@ -2,19 +2,18 @@
   export let client;
   const { Entry, SetStatus } = require("./control_pb.js");
   const { ControlClient } = require("./control_grpc_web_pb.js");
-  const stub = new ControlClient(client.url);
+  const stub = new ControlClient(client.url, null, null);
 
   let entryKey = "";
   let entryValue = "";
 
-  function setEntry() {
+  async function setEntry() {
     console.log(`Setting Key=${entryKey}, Value=${entryValue}`);
     let request = new Entry();
     request.setKey(entryKey);
     request.setValue(entryValue);
-    stub.setStatus(request, {}, (err, res) => {
-      console.log(response);
-    });
+    const res = await stub.setEntry(request, {});
+    console.log(res.getStatus());
   }
 </script>
 

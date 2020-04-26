@@ -20,7 +20,7 @@ $ ./gradlew shadowJar
 
 ## Envoy
 Unfortunately gRPC-web does not have in-process support for most langauges
-so we have to use [Envoy](https://www.envoyproxy.io/) as a proxy between web clients and our backend
+so we have to use [Envoy](https://www.envoyproxy.io/) as a sidecare to proxy between web clients and our backend
 service. To start envoy, run;
 ```bash
 $ cd envoy
