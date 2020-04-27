@@ -15,7 +15,8 @@ class RunRaft : CliktCommand() {
     @ObsoleteCoroutinesApi
     override fun run() {
         System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "INFO")
-        System.setProperty(org.slf4j.impl.SimpleLogger.SHOW_DATE_TIME_KEY, "true")
+//        System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "DEBUG")
+        System.setProperty(org.slf4j.impl.SimpleLogger.SHOW_DATE_TIME_KEY, "TRUE")
 
         val clients = (port until port + clients).toList()
         val rafts = clients.map {

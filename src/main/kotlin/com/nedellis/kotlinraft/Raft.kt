@@ -53,7 +53,8 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         override suspend fun run(inChan: ReceiveChannel<Rpc>) = coroutineScope {
             logger.info("Starting coordinator")
 
-            val actorChan = Channel<Rpc>(Channel.UNLIMITED) // Asynchronous
+//            val actorChan = Channel<Rpc>(Channel.UNLIMITED) // Asynchronous
+            val actorChan = Channel<Rpc>() // Synchronous
             val stateChangeChan = Channel<ChangeRole>() // Synchronous
             val tk = Toolkit(logger, port, raftStubs, controlStubs)
             var actor = launch { Follower(State(id = port), tk).run(actorChan, stateChangeChan) }

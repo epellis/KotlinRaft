@@ -20,7 +20,7 @@ $ ./gradlew shadowJar
 
 ## Envoy
 Unfortunately gRPC-web does not have in-process support for most langauges
-so we have to use [Envoy](https://www.envoyproxy.io/) as a sidecare to proxy between web clients and our backend
+so we have to use [Envoy](https://www.envoyproxy.io/) as a sidecar to proxy between web clients and our backend
 service. To start envoy, run;
 ```bash
 $ cd envoy
@@ -33,3 +33,11 @@ Since this section relies on the fine details of Docker networking, if you are n
 on MacOS you might need to check on the 
 [official tutorial](https://github.com/grpc/grpc-web/tree/master/net/grpc/gateway/examples/helloworld)
 to solve issues with proxying.
+
+## Dashboard
+To inspect a running raft cluster you can run an interactive dashboard.
+```bash
+$ cd dashboard
+
+$ npm run dev
+```
