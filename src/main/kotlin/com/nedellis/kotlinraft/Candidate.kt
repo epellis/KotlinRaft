@@ -1,0 +1,84 @@
+package com.nedellis.kotlinraft
+
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.channels.SendChannel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
+
+class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc, ChangeRole> {
+    override suspend fun run(inChan: ReceiveChannel<Rpc>, outChan: SendChannel<ChangeRole>) =
+        coroutineScope {
+            tk.logger.info("Starting candidate")
+
+            val timeout = Channel<Unit>()
+            val responses = Channel<VoteResponse>()
+
+            launch {
+                delay((1000..3000).random().toLong()) // Delay a random amount before timing out
+                timeout.send(Unit)
+            }
+
+            for ((client, stub) in tk.raftStubs) {
+                if (client != tk.port) {
+                    launch {
+                        val req = VoteRequest.newBuilder()
+                            .setCandidateID(tk.port)
+                            .setLastLogIndex(0) // TODO
+                            .setLastLogTerm(0) // TODO
+                            .setTerm(state.currentTerm)
+                            .build()
+                        responses.send(stub.vote(req))
+                    }
+                }
+            }
+
+            var votesGranted = 1 // Candidates should always vote for themselves
+
+            while (true) {
+                select<Unit> {
+                    timeout.onReceive {
+                        val nextState = state.copy(currentTerm = state.currentTerm + 1, votedFor = state.id)
+                        outChan.send(ChangeRole(Role.CANDIDATE, nextState, null))
+                    }
+                    responses.onReceive {
+                        tk.logger.info("Vote Response: ${it.voteGranted}")
+                        it.convertIfTermHigher(state, outChan)
+                        if (it.voteGranted) {
+                            votesGranted++
+                        }
+                        tk.logger.info("Now have $votesGranted votes in term ${state.currentTerm}")
+                        if (votesGranted > tk.raftStubs.size / 2.0) {
+                            outChan.send(ChangeRole(Role.LEADER, state, null))
+                        }
+                    }
+                    inChan.onReceive {
+                        when (it) {
+                            is Rpc.AppendEntries -> {
+                                it.convertIfTermHigher(state, outChan)
+                                if (it.denyIfTermLower(state)) {
+                                    return@onReceive
+                                }
+
+                                outChan.send(ChangeRole(Role.FOLLOWER, state, null))
+                            }
+                            is Rpc.RequestVote -> {
+                                it.vote(Role.CANDIDATE, state, outChan)
+                            }
+                            is Rpc.SetEntry -> {
+                                it.replyUnavailable()
+                            }
+                            is Rpc.RemoveEntry -> {
+                                it.replyUnavailable()
+                            }
+                            is Rpc.GetEntry -> {
+                                it.replyUnavailable()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+}
