@@ -9,6 +9,7 @@ import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.ticker
 import kotlinx.coroutines.selects.select
 import org.slf4j.LoggerFactory
+import java.lang.Exception
 
 class Raft(private val port: Int, private val clients: List<Int>) {
     private val raftStubs = clients.map { it ->
@@ -59,10 +60,14 @@ class Raft(private val port: Int, private val clients: List<Int>) {
             while (true) {
                 select<Unit> {
                     inChan.onReceive {
+//                        logger.info("Routing Incoming RPC: $it")
                         actorChan.send(it)
                     }
                     stateChangeChan.onReceive {
                         logger.info("Canceling actor with state: ${it.state}, switch to ${it.role}")
+                        if (it.msg != null) {
+                            logger.info("Redelivering Message: ${it.msg}")
+                        }
                         actor.cancel()
                         actor = when (it.role) {
                             Role.LEADER -> launch {
@@ -111,7 +116,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                         }
                         responses.onReceive {
                             it.convertIfTermHigher(state, outChan)
-                            TODO("If term is ok")
+//                            TODO("If term is ok")
                         }
                         inChan.onReceive {
                             when (it) {
@@ -243,6 +248,12 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                                     }
 
                                     // TODO: Update log
+
+                                    val response = AppendResponse.newBuilder()
+                                        .setSuccess(true)
+                                        .setTerm(state.currentTerm)
+                                        .build()
+                                    it.res.complete(response)
 
                                     timeoutJob.cancel()
                                     timeoutJob = launch {
@@ -435,13 +446,13 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         override suspend fun append(request: AppendRequest): AppendResponse {
             val res = CompletableDeferred<AppendResponse>()
             actor.send(Rpc.AppendEntries(request, res))
-            return res.await()
+            return withTimeout(1000L) { res.await() }
         }
 
         override suspend fun vote(request: VoteRequest): VoteResponse {
             val res = CompletableDeferred<VoteResponse>()
             actor.send(Rpc.RequestVote(request, res))
-            return res.await()
+            return withTimeout(1000L) { res.await() }
         }
     }
 
