@@ -6,12 +6,13 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.channels.ticker
 import kotlinx.coroutines.selects.select
+import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.lang.Exception
 
 class Raft(private val port: Int, private val clients: List<Int>) {
-    private val raftStubs = clients.map { it ->
+    private val raftStubs = clients.filter { it != port }.map { it ->
         it to RaftGrpcKt.RaftCoroutineStub(
             ManagedChannelBuilder.forAddress("localhost", it)
                 .usePlaintext()
@@ -20,7 +21,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         )
     }.toMap()
 
-    private val controlStubs = clients.map { it ->
+    private val controlStubs = clients.filter { it != port }.map { it ->
         it to ControlGrpcKt.ControlCoroutineStub(
             ManagedChannelBuilder.forAddress("localhost", it)
                 .usePlaintext()
@@ -37,7 +38,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
 
         Thread {
             ServerBuilder.forPort(port)
-                .addService(RaftService(gRPCtoCoordinatorChan))
+                .addService(RaftService(gRPCtoCoordinatorChan, logger))
                 .addService(ControlService(gRPCtoCoordinatorChan))
                 .build()
                 .start()
@@ -122,10 +123,12 @@ suspend fun VoteResponse.convertIfTermHigher(state: State, supervisorChan: SendC
 sealed class Rpc {
     data class AppendEntries(
         val req: AppendRequest,
-        val res: CompletableDeferred<AppendResponse>
+        val res: CompletableDeferred<AppendResponse>,
+        val logger: Logger? = null
     ) : Rpc(), TermChecked {
         override suspend fun convertIfTermHigher(state: State, supervisorChan: SendChannel<ChangeRole>) {
             if (req.term > state.currentTerm) {
+                logger?.info("Changing State to FOLLOWER")
                 val nextState = state.copy(currentTerm = req.term, votedFor = null)
                 supervisorChan.send(ChangeRole(Role.FOLLOWER, nextState, this))
             }
@@ -146,35 +149,36 @@ sealed class Rpc {
 
     data class RequestVote(
         val req: VoteRequest,
-        val res: CompletableDeferred<VoteResponse>
+        val res: CompletableDeferred<VoteResponse>,
+        val logger: Logger? = null
     ) : Rpc(), TermChecked {
         override suspend fun convertIfTermHigher(state: State, supervisorChan: SendChannel<ChangeRole>) {
             if (req.term > state.currentTerm) {
+                logger?.info("Changing State to FOLLOWER")
                 val nextState = state.copy(currentTerm = req.term, votedFor = null)
                 supervisorChan.send(ChangeRole(Role.FOLLOWER, nextState, this))
             }
         }
 
         suspend fun vote(currentRole: Role, state: State, supervisorChan: SendChannel<ChangeRole>) {
-            val logger = LoggerFactory.getLogger("Raft ${state.id}")
             let {
                 val response = VoteResponse.newBuilder()
                     .setTerm(state.currentTerm)
                     .setVoteGranted(false)
                     .build()
 
-                logger.info("Processing vote for ${req.candidateID}, term: ${req.term}, my state: $state")
+                logger?.info("Processing vote for ${req.candidateID}, term: ${req.term}, my state: $state")
 
                 // Reply false if term < currentTerm
                 if (req.term < state.currentTerm) {
-                    logger.info("Denying vote because their term of ${req.term} is less than my term of ${state.currentTerm}")
+                    logger?.info("Denying vote because their term of ${req.term} is less than my term of ${state.currentTerm}")
                     res.complete(response)
                     return
                 }
 
                 // Reply false if already voted for another candidate this term
                 if (state.currentTerm == req.term && state.votedFor != null && state.votedFor != req.candidateID) {
-                    logger.info("Denying vote because already voted for ${state.votedFor}")
+                    logger?.info("Denying vote because already voted for ${state.votedFor}")
                     res.complete(response)
                     return
                 }
@@ -188,7 +192,7 @@ sealed class Rpc {
                     .setVoteGranted(true)
                     .build()
 
-                logger.info("Term ${state.currentTerm} voting for: ${req.candidateID}")
+                logger?.info("Term ${state.currentTerm} voting for: ${req.candidateID}")
                 res.complete(response)
 
                 val nextState = state.copy(votedFor = req.candidateID, currentTerm = req.term)
@@ -237,17 +241,33 @@ enum class Role {
     LEADER, CANDIDATE, FOLLOWER
 }
 
-private class RaftService(val actor: SendChannel<Rpc>) : RaftGrpcKt.RaftCoroutineImplBase() {
+private class RaftService(private val actor: SendChannel<Rpc>, private val logger: Logger) :
+    RaftGrpcKt.RaftCoroutineImplBase() {
     override suspend fun append(request: AppendRequest): AppendResponse {
         val res = CompletableDeferred<AppendResponse>()
-        actor.send(Rpc.AppendEntries(request, res))
-        return withTimeout(1000L) { res.await() }
+        logger.info("Dispatching append request, $request")
+        actor.send(Rpc.AppendEntries(request, res, logger))
+        try {
+            return withTimeout(1000L) {
+                val x = res.await()
+                logger.info("Completed append request, $request")
+                x
+            }
+        } catch (e: Exception) {
+            logger.info("Append Exception: [$e] when responding to $request")
+            throw e
+        }
     }
 
     override suspend fun vote(request: VoteRequest): VoteResponse {
         val res = CompletableDeferred<VoteResponse>()
-        actor.send(Rpc.RequestVote(request, res))
-        return withTimeout(1000L) { res.await() }
+        actor.send(Rpc.RequestVote(request, res, logger))
+        try {
+            return withTimeout(1000L) { res.await() }
+        } catch (e: Exception) {
+            println("Vote Exception: $e responding to $request")
+            throw e
+        }
     }
 }
 

@@ -22,16 +22,14 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
             while (true) {
                 select<Unit> {
                     ticker.onReceive {
-                        for ((client, stub) in tk.raftStubs) {
-                            if (client != tk.port) {
-                                launch {
+                        for (stub in tk.raftStubs.values) {
+                            launch {
 //                                        logger.info("Sending AppendRequest to $client")
-                                    val req = AppendRequest.newBuilder()
-                                        .setTerm(state.currentTerm)
-                                        .build()
-                                    // TODO: Add other fields
-                                    responses.send(stub.append(req))
-                                }
+                                val req = AppendRequest.newBuilder()
+                                    .setTerm(state.currentTerm)
+                                    .build()
+                                // TODO: Add other fields
+                                responses.send(stub.append(req))
                             }
                         }
                     }

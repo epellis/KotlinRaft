@@ -21,17 +21,15 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                 timeout.send(Unit)
             }
 
-            for ((client, stub) in tk.raftStubs) {
-                if (client != tk.port) {
-                    launch {
-                        val req = VoteRequest.newBuilder()
-                            .setCandidateID(tk.port)
-                            .setLastLogIndex(0) // TODO
-                            .setLastLogTerm(0) // TODO
-                            .setTerm(state.currentTerm)
-                            .build()
-                        responses.send(stub.vote(req))
-                    }
+            for (stub in tk.raftStubs.values) {
+                launch {
+                    val req = VoteRequest.newBuilder()
+                        .setCandidateID(tk.port)
+                        .setLastLogIndex(0) // TODO
+                        .setLastLogTerm(0) // TODO
+                        .setTerm(state.currentTerm)
+                        .build()
+                    responses.send(stub.vote(req))
                 }
             }
 
@@ -50,7 +48,7 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                             votesGranted++
                         }
                         tk.logger.info("Now have $votesGranted votes in term ${state.currentTerm}")
-                        if (votesGranted > tk.raftStubs.size / 2.0) {
+                        if (votesGranted > (1 + tk.raftStubs.size) / 2.0) {
                             outChan.send(ChangeRole(Role.LEADER, state, null))
                         }
                     }
@@ -62,7 +60,8 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                                     return@onReceive
                                 }
 
-                                outChan.send(ChangeRole(Role.FOLLOWER, state, null))
+                                tk.logger.info("Candidate switching back to follower")
+                                outChan.send(ChangeRole(Role.FOLLOWER, state, it))
                             }
                             is Rpc.RequestVote -> {
                                 it.vote(Role.CANDIDATE, state, outChan)

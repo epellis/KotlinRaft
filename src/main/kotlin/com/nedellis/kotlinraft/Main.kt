@@ -10,11 +10,12 @@ import kotlinx.coroutines.runBlocking
 
 class RunRaft : CliktCommand() {
     private val port: Int by option(help = "Starting port to run off of").int().default(8000)
-    private val clients: Int by option(help = "Number of raft clients to run").int().default(2)
+    private val clients: Int by option(help = "Number of raft clients to run").int().default(3)
 
     @ObsoleteCoroutinesApi
     override fun run() {
         System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "INFO")
+        System.setProperty(org.slf4j.impl.SimpleLogger.SHOW_DATE_TIME_KEY, "true")
 
         val clients = (port until port + clients).toList()
         val rafts = clients.map {
