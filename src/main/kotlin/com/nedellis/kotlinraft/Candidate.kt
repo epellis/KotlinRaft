@@ -39,6 +39,9 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                 select<Unit> {
                     timeout.onReceive {
                         val nextState = state.copy(currentTerm = state.currentTerm + 1, votedFor = state.id)
+                        if (tk.raftStubs.isEmpty() || votesGranted > (1 + tk.raftStubs.size) / 2.0) {
+                            outChan.send(ChangeRole(Role.LEADER, state, null))
+                        }
                         outChan.send(ChangeRole(Role.CANDIDATE, nextState, null))
                     }
                     responses.onReceive {

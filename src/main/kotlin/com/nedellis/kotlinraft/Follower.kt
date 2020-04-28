@@ -8,7 +8,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 
-
 class Follower(private var state: State, private val tk: Toolkit) : IOActor<Rpc, ChangeRole> {
     override suspend fun run(inChan: ReceiveChannel<Rpc>, outChan: SendChannel<ChangeRole>) =
         coroutineScope {

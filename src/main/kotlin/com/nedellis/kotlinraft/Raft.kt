@@ -9,7 +9,6 @@ import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.selects.select
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import java.lang.Exception
 
 class Raft(private val port: Int, private val clients: List<Int>) {
     private val raftStubs = clients.filter { it != port }.map { it ->
@@ -32,7 +31,6 @@ class Raft(private val port: Int, private val clients: List<Int>) {
 
     private val logger = LoggerFactory.getLogger("Raft $port")
 
-    @ObsoleteCoroutinesApi
     suspend fun run() = coroutineScope {
         val gRPCtoCoordinatorChan = Channel<Rpc>(Channel.UNLIMITED)
 
@@ -53,7 +51,6 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         override suspend fun run(inChan: ReceiveChannel<Rpc>) = coroutineScope {
             logger.info("Starting coordinator")
 
-//            val actorChan = Channel<Rpc>(Channel.UNLIMITED) // Asynchronous
             val actorChan = Channel<Rpc>() // Synchronous
             val stateChangeChan = Channel<ChangeRole>() // Synchronous
             val tk = Toolkit(logger, port, raftStubs, controlStubs)
@@ -89,7 +86,6 @@ class Raft(private val port: Int, private val clients: List<Int>) {
             }
         }
     }
-
 }
 
 data class State(
@@ -246,29 +242,14 @@ private class RaftService(private val actor: SendChannel<Rpc>, private val logge
     RaftGrpcKt.RaftCoroutineImplBase() {
     override suspend fun append(request: AppendRequest): AppendResponse {
         val res = CompletableDeferred<AppendResponse>()
-        logger.info("Dispatching append request, $request")
         actor.send(Rpc.AppendEntries(request, res, logger))
-        try {
-            return withTimeout(1000L) {
-                val x = res.await()
-                logger.info("Completed append request, $request")
-                x
-            }
-        } catch (e: Exception) {
-            logger.info("Append Exception: [$e] when responding to $request")
-            throw e
-        }
+        return withTimeout(1000L) { res.await() }
     }
 
     override suspend fun vote(request: VoteRequest): VoteResponse {
         val res = CompletableDeferred<VoteResponse>()
         actor.send(Rpc.RequestVote(request, res, logger))
-        try {
-            return withTimeout(1000L) { res.await() }
-        } catch (e: Exception) {
-            println("Vote Exception: $e responding to $request")
-            throw e
-        }
+        return withTimeout(1000L) { res.await() }
     }
 }
 

@@ -1,22 +1,23 @@
 package com.nedellis.kotlinraft
 
-import kotlinx.coroutines.ObsoleteCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.channels.ticker
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 
-
 class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, ChangeRole> {
-    @ObsoleteCoroutinesApi
     override suspend fun run(inChan: ReceiveChannel<Rpc>, outChan: SendChannel<ChangeRole>) =
         coroutineScope {
             tk.logger.info("Starting leader")
 
-            val ticker = ticker(1000L)
+            val ticker = Channel<Unit>()
+            launch {
+                delay(1000L)
+                ticker.send(Unit)
+            }
             val responses = Channel<AppendResponse>()
 
             while (true) {
@@ -24,13 +25,18 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
                     ticker.onReceive {
                         for (stub in tk.raftStubs.values) {
                             launch {
-//                                        logger.info("Sending AppendRequest to $client")
+                                tk.logger.info("Sending AppendRequest to $stub")
                                 val req = AppendRequest.newBuilder()
                                     .setTerm(state.currentTerm)
                                     .build()
                                 // TODO: Add other fields
                                 responses.send(stub.append(req))
                             }
+                        }
+
+                        launch {
+                            delay(1000L)
+                            ticker.send(Unit)
                         }
                     }
                     responses.onReceive {

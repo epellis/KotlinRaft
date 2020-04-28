@@ -4,18 +4,16 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.int
-import kotlinx.coroutines.ObsoleteCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 class RunRaft : CliktCommand() {
-    private val port: Int by option(help = "Starting port to run off of").int().default(8000)
-    private val clients: Int by option(help = "Number of raft clients to run").int().default(3)
+    private val port: Int by option(help = "Starting port to run off of").int().default(7000)
+    private val clients: Int by option(help = "Number of raft clients to run").int().default(1)
 
-    @ObsoleteCoroutinesApi
     override fun run() {
-        System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "INFO")
-//        System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "DEBUG")
+//        System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "INFO")
+        System.setProperty(org.slf4j.impl.SimpleLogger.DEFAULT_LOG_LEVEL_KEY, "DEBUG")
         System.setProperty(org.slf4j.impl.SimpleLogger.SHOW_DATE_TIME_KEY, "TRUE")
 
         val clients = (port until port + clients).toList()
