@@ -54,7 +54,7 @@ class Follower(private var state: State, private val tk: Toolkit) : IOActor<Rpc,
                             is Rpc.SetEntry -> {
                                 val leaderStub = tk.controlStubs[state.votedFor]
                                 if (leaderStub == null) {
-                                    it.replyUnavailable()
+                                    it.replyWithStatus(SetStatus.Status.UNAVAILABLE)
                                 } else {
                                     it.forwardToLeader(leaderStub)
                                 }
@@ -62,7 +62,7 @@ class Follower(private var state: State, private val tk: Toolkit) : IOActor<Rpc,
                             is Rpc.RemoveEntry -> {
                                 val leaderStub = tk.controlStubs[state.votedFor]
                                 if (leaderStub == null) {
-                                    it.replyUnavailable()
+                                    it.replyWithStatus(RemoveStatus.Status.UNAVAILABLE)
                                 } else {
                                     it.forwardToLeader(leaderStub)
                                 }
@@ -70,7 +70,7 @@ class Follower(private var state: State, private val tk: Toolkit) : IOActor<Rpc,
                             is Rpc.GetEntry -> {
                                 val leaderStub = tk.controlStubs[state.votedFor]
                                 if (leaderStub == null) {
-                                    it.replyUnavailable()
+                                    it.replyWithStatus(GetStatus.Status.UNAVAILABLE)
                                 } else {
                                     it.forwardToLeader(leaderStub)
                                 }

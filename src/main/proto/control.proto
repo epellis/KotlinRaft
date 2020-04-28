@@ -34,7 +34,6 @@ message SetStatus {
 message RemoveStatus {
   enum Status {
     OK = 0;
-    NOT_FOUND = 1;
     UNAVAILABLE = 2;
   }
   Status status = 1;

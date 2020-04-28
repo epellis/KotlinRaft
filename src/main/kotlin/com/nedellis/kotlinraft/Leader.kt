@@ -25,7 +25,7 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
                     ticker.onReceive {
                         for (stub in tk.raftStubs.values) {
                             launch {
-                                tk.logger.info("Sending AppendRequest to $stub")
+//                                tk.logger.info("Sending AppendRequest to $stub")
                                 val req = AppendRequest.newBuilder()
                                     .setTerm(state.currentTerm)
                                     .build()
@@ -55,14 +55,20 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
                                 it.vote(Role.LEADER, state, outChan)
                             }
                             is Rpc.SetEntry -> {
-                                tk.logger.info("Processing set unavailable")
-                                it.replyUnavailable()
+                                state.add(it.req)
+                                it.replyWithStatus(SetStatus.Status.OK)
                             }
                             is Rpc.RemoveEntry -> {
-                                it.replyUnavailable()
+                                state.delete(it.req)
+                                it.replyWithStatus(RemoveStatus.Status.OK)
                             }
                             is Rpc.GetEntry -> {
-                                it.replyUnavailable()
+                                val entry = state.find(it.req)
+                                if (entry !== null) {
+                                    it.replyWithStatus(GetStatus.Status.OK, entry)
+                                } else {
+                                    it.replyWithStatus(GetStatus.Status.NOT_FOUND)
+                                }
                             }
                         }
                     }

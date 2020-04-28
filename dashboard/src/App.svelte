@@ -11,7 +11,7 @@
   <div class="container">
     <div class="columns">
       <div class="column">
-        <RaftClient client={{ url: 'http://localhost:8080' }} />
+        <RaftClient client={{ url: 'http://localhost:7070' }} />
       </div>
       <div class="column">
         <RaftClient client={{ url: 'http://localhost:8001' }} />

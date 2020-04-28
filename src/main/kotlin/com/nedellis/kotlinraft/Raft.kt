@@ -37,7 +37,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         Thread {
             ServerBuilder.forPort(port)
                 .addService(RaftService(gRPCtoCoordinatorChan, logger))
-                .addService(ControlService(gRPCtoCoordinatorChan))
+                .addService(ControlService(gRPCtoCoordinatorChan, logger))
                 .build()
                 .start()
                 .awaitTermination()
@@ -92,10 +92,34 @@ data class State(
     val id: Int = 1,
     val currentTerm: Int = 1,
     val votedFor: Int? = null,
-    val log: List<Int> = listOf(),
     val commitIndex: Int = 1,
-    val lastApplied: Int = 1
-)
+    val lastApplied: Int = 1,
+    private val log: MutableList<LogEntry> = mutableListOf()
+) {
+    sealed class LogEntry {
+        data class Addition(val entry: Entry) : LogEntry()
+        data class Deletion(val key: Key) : LogEntry()
+    }
+
+    fun add(entry: Entry) {
+        log.add(LogEntry.Addition(entry))
+    }
+
+    fun delete(key: Key) {
+        log.add(LogEntry.Deletion(key))
+    }
+
+    fun find(key: Key): Entry? {
+        for (item in log.reversed()) {
+            when (item) {
+                is LogEntry.Addition -> if (item.entry.key == key.key) return item.entry
+                is LogEntry.Deletion -> if (item.key.key == key.key) return null
+            }
+        }
+
+        return null
+    }
+}
 
 interface TermChecked {
     suspend fun convertIfTermHigher(state: State, supervisorChan: SendChannel<ChangeRole>)
@@ -198,20 +222,22 @@ sealed class Rpc {
         }
     }
 
-    data class SetEntry(val req: Entry, val res: CompletableDeferred<SetStatus>) : Rpc() {
-        fun replyUnavailable() {
-            val response = SetStatus.newBuilder().setStatus(SetStatus.Status.UNAVAILABLE).build()
+    data class SetEntry(val req: Entry, val res: CompletableDeferred<SetStatus>, val logger: Logger? = null) : Rpc() {
+        fun replyWithStatus(status: SetStatus.Status) {
+            val response = SetStatus.newBuilder().setStatus(status).build()
             res.complete(response)
         }
 
         suspend fun forwardToLeader(stub: ControlGrpcKt.ControlCoroutineStub) {
+            logger?.info("Forwarding $req to leader")
             res.complete(stub.setEntry(req))
         }
     }
 
-    data class RemoveEntry(val req: Key, val res: CompletableDeferred<RemoveStatus>) : Rpc() {
-        fun replyUnavailable() {
-            val response = RemoveStatus.newBuilder().setStatus(RemoveStatus.Status.UNAVAILABLE).build()
+    data class RemoveEntry(val req: Key, val res: CompletableDeferred<RemoveStatus>, val logger: Logger? = null) :
+        Rpc() {
+        fun replyWithStatus(status: RemoveStatus.Status) {
+            val response = RemoveStatus.newBuilder().setStatus(status).build()
             res.complete(response)
         }
 
@@ -220,10 +246,13 @@ sealed class Rpc {
         }
     }
 
-    data class GetEntry(val req: Key, val res: CompletableDeferred<GetStatus>) : Rpc() {
-        fun replyUnavailable() {
-            val response = GetStatus.newBuilder().setStatus(GetStatus.Status.UNAVAILABLE).build()
-            res.complete(response)
+    data class GetEntry(val req: Key, val res: CompletableDeferred<GetStatus>, val logger: Logger? = null) : Rpc() {
+        fun replyWithStatus(status: GetStatus.Status, entry: Entry? = null) {
+            val response = GetStatus.newBuilder().setStatus(status)
+            if (entry !== null) {
+                response.setEntry(entry)
+            }
+            res.complete(response.build())
         }
 
         suspend fun forwardToLeader(stub: ControlGrpcKt.ControlCoroutineStub) {
@@ -238,7 +267,7 @@ enum class Role {
     LEADER, CANDIDATE, FOLLOWER
 }
 
-private class RaftService(private val actor: SendChannel<Rpc>, private val logger: Logger) :
+private class RaftService(private val actor: SendChannel<Rpc>, private val logger: Logger? = null) :
     RaftGrpcKt.RaftCoroutineImplBase() {
     override suspend fun append(request: AppendRequest): AppendResponse {
         val res = CompletableDeferred<AppendResponse>()
@@ -253,7 +282,8 @@ private class RaftService(private val actor: SendChannel<Rpc>, private val logge
     }
 }
 
-private class ControlService(val actor: SendChannel<Rpc>) : ControlGrpcKt.ControlCoroutineImplBase() {
+private class ControlService(private val actor: SendChannel<Rpc>, private val logger: Logger? = null) :
+    ControlGrpcKt.ControlCoroutineImplBase() {
     override suspend fun getEntry(request: Key): GetStatus {
         val res = CompletableDeferred<GetStatus>()
         actor.send(Rpc.GetEntry(request, res))
@@ -268,7 +298,7 @@ private class ControlService(val actor: SendChannel<Rpc>) : ControlGrpcKt.Contro
 
     override suspend fun setEntry(request: Entry): SetStatus {
         val res = CompletableDeferred<SetStatus>()
-        actor.send(Rpc.SetEntry(request, res))
+        actor.send(Rpc.SetEntry(request, res, logger))
         return res.await()
     }
 }

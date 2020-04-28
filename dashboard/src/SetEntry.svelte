@@ -14,7 +14,7 @@
     request.setValue(entryValue);
     const res = await stub.setEntry(request, {});
     const status = res.getStatus() == SetStatus.Status.OK;
-    console.log(`Status: ${status}`);
+    console.log(`Success Status: ${status}`);
   }
 </script>
 

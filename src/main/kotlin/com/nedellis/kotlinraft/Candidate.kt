@@ -70,13 +70,13 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                                 it.vote(Role.CANDIDATE, state, outChan)
                             }
                             is Rpc.SetEntry -> {
-                                it.replyUnavailable()
+                                it.replyWithStatus(SetStatus.Status.UNAVAILABLE)
                             }
                             is Rpc.RemoveEntry -> {
-                                it.replyUnavailable()
+                                it.replyWithStatus(RemoveStatus.Status.UNAVAILABLE)
                             }
                             is Rpc.GetEntry -> {
-                                it.replyUnavailable()
+                                it.replyWithStatus(GetStatus.Status.UNAVAILABLE)
                             }
                         }
                     }
