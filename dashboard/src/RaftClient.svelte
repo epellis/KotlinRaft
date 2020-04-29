@@ -1,12 +1,4 @@
 <script>
-  //   const {
-  //     Entry,
-  //     GetStatus,
-  //     Key,
-  //     RemoveStatus,
-  //     SetStatus
-  //   } = require("./control_pb.js");
-  //   const { ControlClient } = require("./control_grpc_web_pb.js");
   import GetEntry from "./GetEntry.svelte";
   import SetEntry from "./SetEntry.svelte";
   import RemoveEntry from "./RemoveEntry.svelte";
@@ -21,6 +13,9 @@
   <div class="card-content">
     <div class="content">
       <SetEntry {client} />
+    </div>
+    <div class="content">
+      <GetEntry {client} />
     </div>
   </div>
 </div>

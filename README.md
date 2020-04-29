@@ -35,6 +35,9 @@ on MacOS you might need to check on the
 to solve issues with proxying.
 
 ## Dashboard
+
+![Dashboard](./documentation/dashboard.png)
+
 To inspect a running raft cluster you can run an interactive dashboard.
 ```bash
 $ cd dashboard

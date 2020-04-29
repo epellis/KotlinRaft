@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "google-protobuf": "^3.11.4",
-    "grpc-web": "^1.0.7"
+    "grpc-web": "^1.0.7",
+    "svelte-notifications": "^0.9.9"
   }
 }
