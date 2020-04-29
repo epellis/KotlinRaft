@@ -7,6 +7,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.withTimeout
 
 class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, ChangeRole> {
     override suspend fun run(inChan: ReceiveChannel<Rpc>, outChan: SendChannel<ChangeRole>) =
@@ -30,7 +31,7 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
                                     .setTerm(state.currentTerm)
                                     .build()
                                 // TODO: Add other fields
-                                responses.send(stub.append(req))
+                                withTimeout(1000L) { responses.send(stub.append(req)) }
                             }
                         }
 

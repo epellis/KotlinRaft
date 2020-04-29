@@ -32,23 +32,23 @@ class Raft(private val port: Int, private val clients: List<Int>) {
     private val logger = LoggerFactory.getLogger("Raft $port")
 
     suspend fun run() = coroutineScope {
-        val gRPCtoCoordinatorChan = Channel<Rpc>(Channel.UNLIMITED)
+        val gRPCtoCoordinatorChan = Channel<MetaRpc>(Channel.UNLIMITED)
 
-        Thread {
+        launch(Dispatchers.IO) {
             ServerBuilder.forPort(port)
                 .addService(RaftService(gRPCtoCoordinatorChan, logger))
                 .addService(ControlService(gRPCtoCoordinatorChan, logger))
+                .executor(Dispatchers.IO.asExecutor())
                 .build()
                 .start()
                 .awaitTermination()
-        }.start()
+        }
 
         Coordinator().run(gRPCtoCoordinatorChan)
     }
 
-    private inner class Coordinator : IActor<Rpc> {
-        @ObsoleteCoroutinesApi
-        override suspend fun run(inChan: ReceiveChannel<Rpc>) = coroutineScope {
+    private inner class Coordinator : IActor<MetaRpc> {
+        override suspend fun run(inChan: ReceiveChannel<MetaRpc>) = coroutineScope {
             logger.info("Starting coordinator")
 
             val actorChan = Channel<Rpc>() // Synchronous
@@ -59,7 +59,17 @@ class Raft(private val port: Int, private val clients: List<Int>) {
             while (true) {
                 select<Unit> {
                     inChan.onReceive {
-                        actorChan.send(it)
+                        when (it) {
+                            is MetaRpc.Idle -> if (actor.isActive) {
+                                logger.info("Idle")
+                                actor.cancel()
+                            }
+                            is MetaRpc.Wake -> if (actor.isCancelled) {
+                                logger.info("Wake")
+                                actor = launch { Follower(State(id = port), tk).run(actorChan, stateChangeChan) }
+                            }
+                            is MetaRpc.RpcWrapper -> actorChan.send(it.rpc)
+                        }
                     }
                     stateChangeChan.onReceive {
                         logger.info("Canceling actor with state: ${it.state}, switch to ${it.role}")
@@ -261,44 +271,63 @@ sealed class Rpc {
     }
 }
 
+sealed class MetaRpc {
+    object Idle : MetaRpc()
+    object Wake : MetaRpc()
+    data class RpcWrapper(val rpc: Rpc) : MetaRpc() // Pass through from coordinator to raft role actor
+}
+
 data class ChangeRole(val role: Role, val state: State, val msg: Rpc?)
 
 enum class Role {
     LEADER, CANDIDATE, FOLLOWER
 }
 
-private class RaftService(private val actor: SendChannel<Rpc>, private val logger: Logger? = null) :
+private class RaftService(private val actor: SendChannel<MetaRpc>, private val logger: Logger? = null) :
     RaftGrpcKt.RaftCoroutineImplBase() {
     override suspend fun append(request: AppendRequest): AppendResponse {
         val res = CompletableDeferred<AppendResponse>()
-        actor.send(Rpc.AppendEntries(request, res, logger))
+        actor.send(MetaRpc.RpcWrapper(Rpc.AppendEntries(request, res, logger)))
         return withTimeout(1000L) { res.await() }
     }
 
     override suspend fun vote(request: VoteRequest): VoteResponse {
         val res = CompletableDeferred<VoteResponse>()
-        actor.send(Rpc.RequestVote(request, res, logger))
+        actor.send(MetaRpc.RpcWrapper(Rpc.RequestVote(request, res, logger)))
         return withTimeout(1000L) { res.await() }
     }
 }
 
-private class ControlService(private val actor: SendChannel<Rpc>, private val logger: Logger? = null) :
+private class ControlService(
+    private val actor: SendChannel<MetaRpc>,
+    private val logger: Logger? = null
+) :
     ControlGrpcKt.ControlCoroutineImplBase() {
     override suspend fun getEntry(request: Key): GetStatus {
         val res = CompletableDeferred<GetStatus>()
-        actor.send(Rpc.GetEntry(request, res))
+        actor.send(MetaRpc.RpcWrapper(Rpc.GetEntry(request, res)))
         return res.await()
     }
 
     override suspend fun removeEntry(request: Key): RemoveStatus {
         val res = CompletableDeferred<RemoveStatus>()
-        actor.send(Rpc.RemoveEntry(request, res))
+        actor.send(MetaRpc.RpcWrapper(Rpc.RemoveEntry(request, res)))
         return res.await()
     }
 
     override suspend fun setEntry(request: Entry): SetStatus {
         val res = CompletableDeferred<SetStatus>()
-        actor.send(Rpc.SetEntry(request, res, logger))
+        actor.send(MetaRpc.RpcWrapper(Rpc.SetEntry(request, res, logger)))
         return res.await()
+    }
+
+    override suspend fun idleClient(request: Nothing): Nothing {
+        actor.send(MetaRpc.Idle)
+        return Nothing.newBuilder().build()
+    }
+
+    override suspend fun wakeClient(request: Nothing): Nothing {
+        actor.send(MetaRpc.Wake)
+        return Nothing.newBuilder().build()
     }
 }

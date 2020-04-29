@@ -19,14 +19,16 @@
         addNotification({
           text: "Not Found",
           position: "bottom-center",
-          type: "warning"
+          type: "warning",
+          removeAfter: 1000
         });
       }
       if (res.getStatus() == GetStatus.Status.OK) {
         addNotification({
-          text: res.getEntry().getValue(),
+          text: `${entryKey}\t=>\t${res.getEntry().getValue()}`,
           position: "bottom-center",
-          type: "success"
+          type: "success",
+          removeAfter: 3000
         });
       }
     } catch (e) {

@@ -22,7 +22,8 @@
         addNotification({
           text: "Success",
           position: "bottom-center",
-          type: "success"
+          type: "success",
+          removeAfter: 1000
         });
       }
     } catch (e) {

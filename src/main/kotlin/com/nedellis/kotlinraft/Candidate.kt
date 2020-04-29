@@ -7,6 +7,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.withTimeout
 
 class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc, ChangeRole> {
     override suspend fun run(inChan: ReceiveChannel<Rpc>, outChan: SendChannel<ChangeRole>) =
@@ -17,7 +18,9 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
             val responses = Channel<VoteResponse>()
 
             launch {
-                delay((1000..3000).random().toLong()) // Delay a random amount before timing out
+                val delayPeriod = (1000..3000).random().toLong()
+                tk.logger.info("Waiting $delayPeriod ms for others to vote")
+                delay(delayPeriod) // Delay a random amount before timing out
                 timeout.send(Unit)
             }
 
@@ -29,7 +32,7 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                         .setLastLogTerm(0) // TODO
                         .setTerm(state.currentTerm)
                         .build()
-                    responses.send(stub.vote(req))
+                    withTimeout(1000L) { responses.send(stub.vote(req)) }
                 }
             }
 
@@ -38,6 +41,7 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
             while (true) {
                 select<Unit> {
                     timeout.onReceive {
+                        tk.logger.info("Voting Timeout")
                         val nextState = state.copy(currentTerm = state.currentTerm + 1, votedFor = state.id)
                         if (tk.raftStubs.isEmpty() || votesGranted > (1 + tk.raftStubs.size) / 2.0) {
                             outChan.send(ChangeRole(Role.LEADER, state, null))
