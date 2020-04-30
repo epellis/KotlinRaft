@@ -16,6 +16,6 @@
 </script>
 
 <div class="container">
-  <button class="button" on:click={doIdle}>Idle</button>
-  <button class="button" on:click={doWake}>Wake</button>
+  <button class="button is-warning" on:click={doIdle}>Idle</button>
+  <button class="button is-success" on:click={doWake}>Wake</button>
 </div>

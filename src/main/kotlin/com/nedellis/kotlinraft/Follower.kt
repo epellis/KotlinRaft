@@ -72,7 +72,12 @@ class Follower(private var state: State, private val tk: Toolkit) : IOActor<Rpc,
                                 if (leaderStub == null) {
                                     it.replyWithStatus(GetStatus.Status.UNAVAILABLE)
                                 } else {
-                                    it.forwardToLeader(leaderStub)
+                                    val entry = state.find(it.req)
+                                    if (entry !== null) {
+                                        it.replyWithStatus(GetStatus.Status.OK, entry)
+                                    } else {
+                                        it.replyWithStatus(GetStatus.Status.NOT_FOUND)
+                                    }
                                 }
                             }
                         }

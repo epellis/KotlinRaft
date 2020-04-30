@@ -1,0 +1,46 @@
+version: "3.7"
+services:
+
+  proxy0:
+    build:
+      context: .
+      dockerfile: envoy.Dockerfile
+    volumes:
+      - ./envoy0.yaml:/etc/envoy.yaml
+    expose:
+      - "7070"
+    ports:
+      - "7070:7070"
+
+  proxy1:
+    build:
+      context: .
+      dockerfile: envoy.Dockerfile
+    volumes:
+      - ./envoy1.yaml:/etc/envoy.yaml
+    expose:
+      - "7071"
+    ports:
+      - "7071:7070"
+
+  proxy2:
+    build:
+      context: .
+      dockerfile: envoy.Dockerfile
+    volumes:
+      - ./envoy2.yaml:/etc/envoy.yaml
+    expose:
+      - "7072"
+    ports:
+      - "7072:7070"
+
+  proxy3:
+    build:
+      context: .
+      dockerfile: envoy.Dockerfile
+    volumes:
+      - ./envoy3.yaml:/etc/envoy.yaml
+    expose:
+      - "7073"
+    ports:
+      - "7073:7070"
