@@ -9,10 +9,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
 
+private data class FollowerState(var nextIndex: Int = 0, var matchIndex: Int = 0)
+
 class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, ChangeRole> {
     override suspend fun run(inChan: ReceiveChannel<Rpc>, outChan: SendChannel<ChangeRole>) =
         coroutineScope {
             tk.logger.info("Starting leader")
+
+            val followers = tk.raftStubs.keys.map {
+                it to FollowerState()
+            }.toMap()
 
             val ticker = Channel<Unit>()
             launch {
@@ -55,13 +61,9 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
                             is Rpc.RequestVote -> {
                                 it.vote(Role.LEADER, state, outChan)
                             }
-                            is Rpc.SetEntry -> {
-                                state.add(it.req)
-                                it.replyWithStatus(SetStatus.Status.OK)
-                            }
-                            is Rpc.RemoveEntry -> {
-                                state.delete(it.req)
-                                it.replyWithStatus(RemoveStatus.Status.OK)
+                            is Rpc.UpdateEntry -> {
+                                state.log.add(it.req)
+                                it.replyWithStatus(UpdateStatus.Status.OK)
                             }
                             is Rpc.GetEntry -> {
                                 val entry = state.find(it.req)
@@ -76,4 +78,13 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
                 }
             }
         }
+
+    private fun buildAppendRequest(state: State, followerState: FollowerState): AppendRequest {
+        val delta = state.log.slice(followerState.matchIndex..state.log.size)
+
+        val req = AppendRequest.newBuilder()
+//            .addAllEntries(delta)
+
+        return req.build()
+    }
 }

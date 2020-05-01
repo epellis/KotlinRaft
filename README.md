@@ -21,13 +21,13 @@ $ ./gradlew shadowJar
 ## Envoy
 Unfortunately gRPC-web does not have in-process support for most langauges
 so we have to use [Envoy](https://www.envoyproxy.io/) as a sidecar to proxy between web clients and our backend
-service. To start envoy, run;
+service. To start envoy, run:
 ```bash
 $ cd envoy
 
-$ docker build -t epelesis/envoy -f ./envoy.Dockerfile .
+$ docker-compose pull
 
-$ docker run -d -p 8080:8080 epelesis/envoy
+$ docker-compose up --build
 ```
 Since this section relies on the fine details of Docker networking, if you are not
 on MacOS you might need to check on the 

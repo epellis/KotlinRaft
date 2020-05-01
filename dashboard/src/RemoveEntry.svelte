@@ -1,7 +1,7 @@
 <script>
   export let client;
   import { getNotificationsContext } from "svelte-notifications";
-  const { Key, RemoveStatus } = require("./control_pb.js");
+  const { Entry, UpdateStatus } = require("./control_pb.js");
   const { ControlPromiseClient } = require("./control_grpc_web_pb.js");
 
   const stub = new ControlPromiseClient(client.url, null, null);
@@ -11,10 +11,11 @@
 
   async function setEntry() {
     try {
-      const request = new Key();
+      const request = new Entry();
       request.setKey(entryKey);
-      const res = await stub.removeEntry(request, {});
-      if (res.getStatus() == RemoveStatus.Status.OK) {
+      request.setAction(Entry.Action.REMOVE);
+      const res = await stub.updateEntry(request, {});
+      if (res.getStatus() == UpdateStatus.Status.OK) {
         addNotification({
           text: "removed",
           position: "bottom-center",

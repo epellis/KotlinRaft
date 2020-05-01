@@ -104,26 +104,19 @@ data class State(
     val votedFor: Int? = null,
     val commitIndex: Int = 1,
     val lastApplied: Int = 1,
-    private val log: MutableList<LogEntry> = mutableListOf()
+    val log: MutableList<Entry> = mutableListOf()
 ) {
-    sealed class LogEntry {
-        data class Addition(val entry: Entry) : LogEntry()
-        data class Deletion(val key: Key) : LogEntry()
-    }
-
-    fun add(entry: Entry) {
-        log.add(LogEntry.Addition(entry))
-    }
-
-    fun delete(key: Key) {
-        log.add(LogEntry.Deletion(key))
-    }
-
     fun find(key: Key): Entry? {
         for (item in log.reversed()) {
-            when (item) {
-                is LogEntry.Addition -> if (item.entry.key == key.key) return item.entry
-                is LogEntry.Deletion -> if (item.key.key == key.key) return null
+            when (item.action) {
+                Entry.Action.APPEND -> if (item.key == key.key) {
+                    return item
+                }
+                Entry.Action.DELETE -> if (item.key == key.key) {
+                    return null
+                }
+                else -> {
+                }
             }
         }
 
@@ -214,7 +207,14 @@ sealed class Rpc {
                     return
                 }
 
-                // TODO: Check Log
+                // Check if candidates log is at least as up to date as my log
+                if (req.lastLogTerm < state.currentTerm || req.lastLogIndex < state.log.size) {
+                    logger?.info("Denying vote because candidate log is not up to date with mine")
+                    logger?.info("Candidate term = ${req.lastLogTerm} idx = ${req.lastLogIndex}")
+                    logger?.info("My term = ${state.currentTerm} idx = ${state.log.size}")
+                    res.complete(response)
+                    return
+                }
             }
 
             let {
@@ -232,27 +232,16 @@ sealed class Rpc {
         }
     }
 
-    data class SetEntry(val req: Entry, val res: CompletableDeferred<SetStatus>, val logger: Logger? = null) : Rpc() {
-        fun replyWithStatus(status: SetStatus.Status) {
-            val response = SetStatus.newBuilder().setStatus(status).build()
+    data class UpdateEntry(val req: Entry, val res: CompletableDeferred<UpdateStatus>, val logger: Logger? = null) :
+        Rpc() {
+        fun replyWithStatus(status: UpdateStatus.Status) {
+            val response = UpdateStatus.newBuilder().setStatus(status).build()
             res.complete(response)
         }
 
         suspend fun forwardToLeader(stub: ControlGrpcKt.ControlCoroutineStub) {
             logger?.info("Forwarding $req to leader")
-            res.complete(stub.setEntry(req))
-        }
-    }
-
-    data class RemoveEntry(val req: Key, val res: CompletableDeferred<RemoveStatus>, val logger: Logger? = null) :
-        Rpc() {
-        fun replyWithStatus(status: RemoveStatus.Status) {
-            val response = RemoveStatus.newBuilder().setStatus(status).build()
-            res.complete(response)
-        }
-
-        suspend fun forwardToLeader(stub: ControlGrpcKt.ControlCoroutineStub) {
-            res.complete(stub.removeEntry(req))
+            res.complete(stub.updateEntry(req))
         }
     }
 
@@ -309,15 +298,9 @@ private class ControlService(
         return res.await()
     }
 
-    override suspend fun removeEntry(request: Key): RemoveStatus {
-        val res = CompletableDeferred<RemoveStatus>()
-        actor.send(MetaRpc.RpcWrapper(Rpc.RemoveEntry(request, res)))
-        return res.await()
-    }
-
-    override suspend fun setEntry(request: Entry): SetStatus {
-        val res = CompletableDeferred<SetStatus>()
-        actor.send(MetaRpc.RpcWrapper(Rpc.SetEntry(request, res, logger)))
+    override suspend fun updateEntry(request: Entry): UpdateStatus {
+        val res = CompletableDeferred<UpdateStatus>()
+        actor.send(MetaRpc.RpcWrapper(Rpc.UpdateEntry(request, res, logger)))
         return res.await()
     }
 

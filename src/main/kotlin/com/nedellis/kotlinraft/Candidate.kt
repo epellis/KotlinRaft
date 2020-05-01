@@ -28,8 +28,8 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                 launch {
                     val req = VoteRequest.newBuilder()
                         .setCandidateID(tk.port)
-                        .setLastLogIndex(0) // TODO
-                        .setLastLogTerm(0) // TODO
+                        .setLastLogIndex(state.log.size) // TODO
+                        .setLastLogTerm(state.currentTerm) // TODO
                         .setTerm(state.currentTerm)
                         .build()
                     withTimeout(1000L) { responses.send(stub.vote(req)) }
@@ -73,11 +73,8 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                             is Rpc.RequestVote -> {
                                 it.vote(Role.CANDIDATE, state, outChan)
                             }
-                            is Rpc.SetEntry -> {
-                                it.replyWithStatus(SetStatus.Status.UNAVAILABLE)
-                            }
-                            is Rpc.RemoveEntry -> {
-                                it.replyWithStatus(RemoveStatus.Status.UNAVAILABLE)
+                            is Rpc.UpdateEntry -> {
+                                it.replyWithStatus(UpdateStatus.Status.UNAVAILABLE)
                             }
                             is Rpc.GetEntry -> {
                                 it.replyWithStatus(GetStatus.Status.UNAVAILABLE)

@@ -51,18 +51,10 @@ class Follower(private var state: State, private val tk: Toolkit) : IOActor<Rpc,
                             is Rpc.RequestVote -> {
                                 it.vote(Role.FOLLOWER, state, outChan)
                             }
-                            is Rpc.SetEntry -> {
+                            is Rpc.UpdateEntry -> {
                                 val leaderStub = tk.controlStubs[state.votedFor]
                                 if (leaderStub == null) {
-                                    it.replyWithStatus(SetStatus.Status.UNAVAILABLE)
-                                } else {
-                                    it.forwardToLeader(leaderStub)
-                                }
-                            }
-                            is Rpc.RemoveEntry -> {
-                                val leaderStub = tk.controlStubs[state.votedFor]
-                                if (leaderStub == null) {
-                                    it.replyWithStatus(RemoveStatus.Status.UNAVAILABLE)
+                                    it.replyWithStatus(UpdateStatus.Status.UNAVAILABLE)
                                 } else {
                                     it.forwardToLeader(leaderStub)
                                 }
