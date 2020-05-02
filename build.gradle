@@ -90,9 +90,11 @@ sourceSets {
 
 compileKotlin {
     kotlinOptions.jvmTarget = "1.8"
+    kotlinOptions.freeCompilerArgs = ["-Xallow-result-return-type"]
 }
 compileTestKotlin {
     kotlinOptions.jvmTarget = "1.8"
+    kotlinOptions.freeCompilerArgs = ["-Xallow-result-return-type"]
 }
 
 mainClassName = 'com.nedellis.kotlinraft.MainKt'

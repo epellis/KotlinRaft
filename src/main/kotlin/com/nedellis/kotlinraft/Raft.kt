@@ -88,7 +88,7 @@ data class State(
     val votedFor: Int? = null,
     val commitIndex: Int = 1,
     val lastApplied: Int = 1,
-    val log: MutableList<Entry> = mutableListOf()
+    var log: MutableList<Entry> = mutableListOf()
 ) {
     fun find(key: Key): Entry? {
         for (item in log.reversed()) {

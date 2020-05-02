@@ -26,6 +26,7 @@ message Entry {
     DELETE = 1;
   }
   Action action = 3;
+  int32 term = 4;
 }
 
 message Key {
@@ -47,5 +48,5 @@ message GetStatus {
     UNAVAILABLE = 3;
   }
   Status status = 1;
-  Entry entry = 2;
+  string value = 2;
 }

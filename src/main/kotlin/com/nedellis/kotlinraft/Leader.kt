@@ -47,8 +47,10 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
                     responses.onReceive {
                         it.res.convertIfTermHigher(state, outChan)
 
-                        // If failure because of log inconsistency, decrement nextIndex and try again
-                        if (!it.res.success) {
+                        if (it.res.success) {
+                            it.info.nextIndex = state.log.size + 1
+                            it.info.matchIndex = state.log.size
+                        } else {
                             tk.logger.warn("Failed to update ${it.info.port} next index to ${it.info.nextIndex}")
                             it.info.nextIndex--
                             val req = buildAppendRequest(tk.port, state, it.info)
@@ -96,7 +98,7 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
             .setTerm(state.currentTerm)
             .setLeaderID(port)
             .setPrevLogIndex(info.matchIndex) // TODO: could be wrong
-            .setPrevLogIndex(state.currentTerm) // TODO: could be wrong
+            .setPrevLogTerm(state.currentTerm) // TODO: could be wrong
             .addAllEntries(delta)
             .setLeaderCommit(state.log.size)
 
