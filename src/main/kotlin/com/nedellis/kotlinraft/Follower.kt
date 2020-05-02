@@ -52,7 +52,7 @@ class Follower(private var state: State, private val tk: Toolkit) : IOActor<Rpc,
                                 it.vote(Role.FOLLOWER, state, outChan)
                             }
                             is Rpc.UpdateEntry -> {
-                                val leaderStub = tk.controlStubs[state.votedFor]
+                                val leaderStub = tk.stubs[state.votedFor]?.controlStub
                                 if (leaderStub == null) {
                                     it.replyWithStatus(UpdateStatus.Status.UNAVAILABLE)
                                 } else {
@@ -60,7 +60,7 @@ class Follower(private var state: State, private val tk: Toolkit) : IOActor<Rpc,
                                 }
                             }
                             is Rpc.GetEntry -> {
-                                val leaderStub = tk.controlStubs[state.votedFor]
+                                val leaderStub = tk.stubs[state.votedFor]?.controlStub
                                 if (leaderStub == null) {
                                     it.replyWithStatus(GetStatus.Status.UNAVAILABLE)
                                 } else {

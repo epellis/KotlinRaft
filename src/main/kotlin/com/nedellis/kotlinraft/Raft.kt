@@ -11,23 +11,7 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
 class Raft(private val port: Int, private val clients: List<Int>) {
-    private val raftStubs = clients.filter { it != port }.map { it ->
-        it to RaftGrpcKt.RaftCoroutineStub(
-            ManagedChannelBuilder.forAddress("localhost", it)
-                .usePlaintext()
-                .executor(Dispatchers.IO.asExecutor())
-                .build()
-        )
-    }.toMap()
-
-    private val controlStubs = clients.filter { it != port }.map { it ->
-        it to ControlGrpcKt.ControlCoroutineStub(
-            ManagedChannelBuilder.forAddress("localhost", it)
-                .usePlaintext()
-                .executor(Dispatchers.IO.asExecutor())
-                .build()
-        )
-    }.toMap()
+    private val stubs = clients.filter { it != port }.map { it to buildPeer(it) }.toMap()
 
     private val logger = LoggerFactory.getLogger("Raft $port")
 
@@ -53,7 +37,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
 
             val actorChan = Channel<Rpc>() // Synchronous
             val stateChangeChan = Channel<ChangeRole>() // Synchronous
-            val tk = Toolkit(logger, port, raftStubs, controlStubs)
+            val tk = Toolkit(logger, port, stubs)
             var actor = launch { Follower(State(id = port), tk).run(actorChan, stateChangeChan) }
 
             while (true) {
@@ -123,6 +107,7 @@ data class State(
         return null
     }
 }
+
 
 interface TermChecked {
     suspend fun convertIfTermHigher(state: State, supervisorChan: SendChannel<ChangeRole>)

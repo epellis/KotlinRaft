@@ -9,35 +9,34 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeout
 
-private data class FollowerState(var nextIndex: Int = 0, var matchIndex: Int = 0)
+private data class FollowerInfo(var nextIndex: Int, var matchIndex: Int, val info: PeerInfo, val port: Int)
+private data class FollowerResponse(val res: AppendResponse, val info: FollowerInfo)
 
 class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, ChangeRole> {
     override suspend fun run(inChan: ReceiveChannel<Rpc>, outChan: SendChannel<ChangeRole>) =
         coroutineScope {
             tk.logger.info("Starting leader")
 
-            val followers = tk.raftStubs.keys.map {
-                it to FollowerState()
-            }.toMap()
+            val followers = (tk.stubs).map { (port, info) ->
+                FollowerInfo(state.log.size + 1, 0, info, port)
+            }
 
             val ticker = Channel<Unit>()
             launch {
                 delay(1000L)
                 ticker.send(Unit)
             }
-            val responses = Channel<AppendResponse>()
+            val responses = Channel<FollowerResponse>()
 
             while (true) {
                 select<Unit> {
                     ticker.onReceive {
-                        for (stub in tk.raftStubs.values) {
+                        for (info in followers) {
                             launch {
-//                                tk.logger.info("Sending AppendRequest to $stub")
-                                val req = AppendRequest.newBuilder()
-                                    .setTerm(state.currentTerm)
-                                    .build()
-                                // TODO: Add other fields
-                                withTimeout(1000L) { responses.send(stub.append(req)) }
+                                val req = buildAppendRequest(tk.port, state, info)
+                                tk.logger.info("Sending update to ${info.port}")
+                                val res = withTimeout(1000L) { info.info.raftStub.append(req) }
+                                responses.send(FollowerResponse(res, info))
                             }
                         }
 
@@ -47,8 +46,17 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
                         }
                     }
                     responses.onReceive {
-                        it.convertIfTermHigher(state, outChan)
-//                            TODO("If term is ok")
+                        it.res.convertIfTermHigher(state, outChan)
+
+                        // If failure because of log inconsistency, decrement nextIndex and try again
+                        if (!it.res.success) {
+                            tk.logger.info("Failed to update ${it.info.port} next index to ${it.info.nextIndex}")
+                            it.info.nextIndex--
+                            val req = buildAppendRequest(tk.port, state, it.info)
+                            tk.logger.info("Sending update to ${it.info.port}")
+                            val res = withTimeout(1000L) { it.info.info.raftStub.append(req) }
+                            responses.send(FollowerResponse(res, it.info))
+                        }
                     }
                     inChan.onReceive {
                         when (it) {
@@ -79,11 +87,16 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
             }
         }
 
-    private fun buildAppendRequest(state: State, followerState: FollowerState): AppendRequest {
-        val delta = state.log.slice(followerState.matchIndex..state.log.size)
+    private fun buildAppendRequest(port: Int, state: State, info: FollowerInfo): AppendRequest {
+        val delta = state.log.slice(info.matchIndex..state.log.size)
 
         val req = AppendRequest.newBuilder()
-//            .addAllEntries(delta)
+            .setTerm(state.currentTerm)
+            .setLeaderID(port)
+            .setPrevLogIndex(info.matchIndex) // TODO: could be wrong
+            .setPrevLogIndex(state.currentTerm) // TODO: could be wrong
+            .addAllEntries(delta)
+            .setLeaderCommit(state.log.size)
 
         return req.build()
     }

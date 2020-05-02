@@ -43,7 +43,7 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                     timeout.onReceive {
                         tk.logger.info("Voting Timeout")
                         val nextState = state.copy(currentTerm = state.currentTerm + 1, votedFor = state.id)
-                        if (tk.raftStubs.isEmpty() || votesGranted > (1 + tk.raftStubs.size) / 2.0) {
+                        if (tk.stubs.isEmpty() || votesGranted > (1 + tk.stubs.size) / 2.0) {
                             outChan.send(ChangeRole(Role.LEADER, state, null))
                         }
                         outChan.send(ChangeRole(Role.CANDIDATE, nextState, null))
@@ -55,7 +55,7 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                             votesGranted++
                         }
                         tk.logger.info("Now have $votesGranted votes in term ${state.currentTerm}")
-                        if (votesGranted > (1 + tk.raftStubs.size) / 2.0) {
+                        if (votesGranted > (1 + tk.stubs.size) / 2.0) {
                             outChan.send(ChangeRole(Role.LEADER, state, null))
                         }
                     }
