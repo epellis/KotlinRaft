@@ -23,8 +23,8 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
 
             val ticker = Channel<Unit>()
             launch {
-                delay(1000L)
                 ticker.send(Unit)
+                delay(1000L)
             }
             val responses = Channel<FollowerResponse>()
 
@@ -34,7 +34,6 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
                         for (info in followers) {
                             launch {
                                 val req = buildAppendRequest(tk.port, state, info)
-                                tk.logger.info("Sending update to ${info.port}")
                                 val res = withTimeout(1000L) { info.info.raftStub.append(req) }
                                 responses.send(FollowerResponse(res, info))
                             }
@@ -50,10 +49,10 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
 
                         // If failure because of log inconsistency, decrement nextIndex and try again
                         if (!it.res.success) {
-                            tk.logger.info("Failed to update ${it.info.port} next index to ${it.info.nextIndex}")
+                            tk.logger.warn("Failed to update ${it.info.port} next index to ${it.info.nextIndex}")
                             it.info.nextIndex--
                             val req = buildAppendRequest(tk.port, state, it.info)
-                            tk.logger.info("Sending update to ${it.info.port}")
+                            tk.logger.info("ReSending update to ${it.info.port}")
                             val res = withTimeout(1000L) { it.info.info.raftStub.append(req) }
                             responses.send(FollowerResponse(res, it.info))
                         }
@@ -71,6 +70,9 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
                             }
                             is Rpc.UpdateEntry -> {
                                 state.log.add(it.req)
+
+                                // TODO: Broadcast update to followers and wait until half respond before replying success
+
                                 it.replyWithStatus(UpdateStatus.Status.OK)
                             }
                             is Rpc.GetEntry -> {
@@ -88,7 +90,7 @@ class Leader(private val state: State, private val tk: Toolkit) : IOActor<Rpc, C
         }
 
     private fun buildAppendRequest(port: Int, state: State, info: FollowerInfo): AppendRequest {
-        val delta = state.log.slice(info.matchIndex..state.log.size)
+        val delta = state.log.subList(info.matchIndex, state.log.size).toList()
 
         val req = AppendRequest.newBuilder()
             .setTerm(state.currentTerm)

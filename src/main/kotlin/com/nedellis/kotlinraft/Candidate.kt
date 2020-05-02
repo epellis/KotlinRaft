@@ -24,7 +24,7 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                 timeout.send(Unit)
             }
 
-            for (stub in tk.raftStubs.values) {
+            for (info in tk.stubs.values) {
                 launch {
                     val req = VoteRequest.newBuilder()
                         .setCandidateID(tk.port)
@@ -32,7 +32,7 @@ class Candidate(private val state: State, private val tk: Toolkit) : IOActor<Rpc
                         .setLastLogTerm(state.currentTerm) // TODO
                         .setTerm(state.currentTerm)
                         .build()
-                    withTimeout(1000L) { responses.send(stub.vote(req)) }
+                    withTimeout(1000L) { responses.send(info.raftStub.vote(req)) }
                 }
             }
 

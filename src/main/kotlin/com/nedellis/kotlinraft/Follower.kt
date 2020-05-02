@@ -29,12 +29,16 @@ class Follower(private var state: State, private val tk: Toolkit) : IOActor<Rpc,
                     inChan.onReceive {
                         when (it) {
                             is Rpc.AppendEntries -> {
+                                tk.logger.info("AppendEntries")
                                 it.convertIfTermHigher(state, outChan)
                                 if (it.denyIfTermLower(state)) {
                                     return@onReceive
                                 }
 
                                 // TODO: Update log
+                                if (it.req.entriesList.size > 0) {
+                                    tk.logger.info("Received a nonzero amount of entries to update")
+                                }
 
                                 val response = AppendResponse.newBuilder()
                                     .setSuccess(true)

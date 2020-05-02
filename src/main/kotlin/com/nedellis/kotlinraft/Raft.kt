@@ -145,6 +145,7 @@ sealed class Rpc {
 
         suspend fun denyIfTermLower(state: State): Boolean {
             if (req.term < state.currentTerm) {
+                logger?.info("Denying incoming because lower state")
                 val response = AppendResponse.newBuilder()
                     .setSuccess(false)
                     .setTerm(state.currentTerm)
