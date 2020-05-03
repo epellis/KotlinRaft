@@ -17,7 +17,7 @@ data class Log(
         }
 
         // 2. If log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm, reply false
-        if (log.size < req.prevLogIndex || log[req.prevLogIndex].term != req.prevLogTerm) {
+        if (log.size < req.prevLogIndex || (req.prevLogIndex > 0 && log[req.prevLogIndex].term != req.prevLogTerm)) {
             return AppendResponse.newBuilder().setSuccess(false).setTerm(term).build()
         }
 

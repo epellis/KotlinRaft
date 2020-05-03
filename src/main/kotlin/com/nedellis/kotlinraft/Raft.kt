@@ -235,7 +235,7 @@ sealed class Rpc {
         fun replyWithStatus(status: GetStatus.Status, entry: Entry? = null) {
             val response = GetStatus.newBuilder().setStatus(status)
             if (entry !== null) {
-                response.setEntry(entry)
+//                response.setEntry(entry)
             }
             res.complete(response.build())
         }
