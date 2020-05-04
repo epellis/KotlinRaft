@@ -23,7 +23,12 @@ sealed class SideEffect {
 }
 
 object FSM {
-    operator fun invoke(): StateMachine<State, Event, SideEffect> {
+    operator fun invoke(
+        ctx: Contexts,
+        toFollower: () -> Unit,
+        toCandidate: () -> Unit,
+        toLeader: () -> Unit
+    ): StateMachine<State, Event, SideEffect> {
         return StateMachine.create<State, Event, SideEffect> {
             state<State.Follower> {
                 on<Event.FollowerTimeout> {
@@ -51,10 +56,11 @@ object FSM {
             }
             onTransition {
                 val validTransition = it as? StateMachine.Transition.Valid ?: return@onTransition
+                ctx.refresh()
                 when (validTransition.sideEffect) {
-                    SideEffect.BecomeFollower -> TODO()
-                    SideEffect.BecomeCandidate -> TODO()
-                    SideEffect.BecomeLeader -> TODO()
+                    SideEffect.BecomeFollower -> toFollower()
+                    SideEffect.BecomeCandidate -> toCandidate()
+                    SideEffect.BecomeLeader -> toLeader()
                 }
             }
         }
