@@ -35,6 +35,7 @@ dependencies {
     implementation 'com.google.protobuf:protobuf-gradle-plugin:0.8.11'
     implementation "com.github.ajalt:clikt:2.6.0"
     implementation 'org.slf4j:slf4j-simple:1.7.29'
+    implementation 'com.tinder.statemachine:statemachine:0.2.0'
     testImplementation "io.kotest:kotest-runner-junit5-jvm:${kotest_version}" // for kotest framework
     testImplementation "io.kotest:kotest-assertions-core-jvm:${kotest_version}" // for kotest core jvm assertions
     testImplementation "io.kotest:kotest-property-jvm:${kotest_version}" // for kotest property test
