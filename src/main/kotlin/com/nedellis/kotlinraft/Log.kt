@@ -83,7 +83,11 @@ data class Log(
         } else {
             log.last().term
         }
-        return VoteRequest.newBuilder().setCandidateID(myId).setLastLogIndex(log.size).setLastLogTerm(lastLogTerm)
+        return VoteRequest.newBuilder()
+            .setCandidateID(myId)
+            .setTerm(term)
+            .setLastLogIndex(log.size)
+            .setLastLogTerm(lastLogTerm)
             .build()
     }
 

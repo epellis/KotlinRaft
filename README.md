@@ -1,4 +1,5 @@
 # KotlinRaft
+[![CircleCI](https://circleci.com/gh/epellis/KotlinRaft.svg?style=svg)](https://circleci.com/gh/epellis/KotlinRaft)
 
 Provides a replicated, fault tolerant key-value storage that can be used across the network in face of partitions and machine crashes. In other words, everything that the [Raft Paper](https://raft.github.io/raft.pdf) garauntees.
 

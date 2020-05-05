@@ -56,7 +56,7 @@ class LogTest : StringSpec({
             .build()
     }
 
-    "test build vote" {
+    "test fresh build vote" {
         val candidateID = 0
         val currentTerm = 0
         val internalLog = mockk<MutableList<Entry>>()
@@ -71,5 +71,27 @@ class LogTest : StringSpec({
         req.candidateID shouldBe candidateID
         req.lastLogIndex shouldBe internalLog.size
         req.lastLogTerm shouldBe 0
+    }
+
+    "test ongoing build vote" {
+        val candidateID = 0
+        val currentTerm = 5
+        val lastEntryTerm = 3
+        val internalLog = mockk<MutableList<Entry>>()
+        val lastEntry = mockk<Entry>()
+
+        every { internalLog.size } returns 2
+        every { internalLog.isEmpty() } returns false
+        every { internalLog.last() } returns lastEntry
+        every { internalLog[1] } returns lastEntry
+        every { lastEntry.term } returns lastEntryTerm
+
+        val log = Log(term = currentTerm, log = internalLog)
+
+        val req = log.buildVoteRequest(candidateID)
+        req.term shouldBe currentTerm
+        req.candidateID shouldBe candidateID
+        req.lastLogIndex shouldBe internalLog.size
+        req.lastLogTerm shouldBe lastEntryTerm
     }
 })
