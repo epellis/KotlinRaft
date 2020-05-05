@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.withLock
 data class Log(
     private var log: MutableList<Entry> = mutableListOf(),
     private var term: Int = 0,
+    private var votedFor: Int? = null,
     private var commitIndex: Int = 0,
     private val mutex: Mutex = Mutex()
 ) {
@@ -41,6 +42,12 @@ data class Log(
         }
     }
 
+    suspend fun term(): Int {
+        mutex.withLock {
+            return term
+        }
+    }
+
     // Attempt to retrieve entries from the log
     suspend fun get(key: Key): GetStatus {
         mutex.withLock {
@@ -53,6 +60,33 @@ data class Log(
         }
     }
 
+    suspend fun vote(req: VoteRequest): VoteResponse {
+        mutex.withLock {
+            return VoteResponse.newBuilder().setTerm(0).setVoteGranted(false).build()
+        }
+    }
+
+    fun buildAppendRequest(myId: Int): AppendRequest {
+        return AppendRequest.newBuilder()
+//            .setTerm(term)
+//            .setLeaderID(myId)
+//            .setPrevLogIndex()
+//            .setPrevLogTerm()
+//            .addAllEntries()
+//            .setLeaderCommit()
+            .build()
+    }
+
+    fun buildVoteRequest(myId: Int): VoteRequest {
+        val lastLogTerm = if (log.isEmpty()) {
+            0
+        } else {
+            log.last().term
+        }
+        return VoteRequest.newBuilder().setCandidateID(myId).setLastLogIndex(log.size).setLastLogTerm(lastLogTerm)
+            .build()
+    }
+
     // Starting at the back of the log, try to find the first entry, and return success if not deleted
     // TODO: Do not examine entries that are not committed
     // TODO: Speedup with checkpoint hash table
@@ -63,18 +97,6 @@ data class Log(
                 if (entry.key == key.key && entry.action == Entry.Action.DELETE) return Result.failure(Exception())
             }
             return Result.failure(Exception())
-        }
-    }
-
-    suspend fun slice(range: IntRange): List<Entry> {
-        mutex.withLock {
-            return log.slice(range)
-        }
-    }
-
-    suspend fun vote(req: VoteRequest): VoteResponse {
-        mutex.withLock {
-            return VoteResponse.newBuilder().setTerm(0).setVoteGranted(false).build()
         }
     }
 }

@@ -3,6 +3,7 @@ package com.nedellis.kotlinraft
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 
 const val FOLLOWER_TIMEOUT = 5000L
 const val CANDIDATE_TIMEOUT = 1000L
@@ -23,31 +24,26 @@ data class Contexts(
     }
 }
 
+@ExperimentalCoroutinesApi
 class Node(private val tk: Toolkit) {
     private val ctx = Contexts()
     private val fsm = FSM(ctx, ::blockingBecomeFollower, ::blockingBecomeCandidate, ::blockingBecomeLeader)
     private val log = Log()
 
     suspend fun append(req: AppendRequest): AppendResponse {
-        if (checkAppendIsHigherTerm(req)) {
+        tk.logger.info("Append Request: $req, LOG: $log")
+        if (req.term > log.term()) {
             fsm.transition(Event.HigherTermServer)
         }
-        return when (fsm.state) {
-            State.Follower -> log.append(req)
-            State.Candidate -> log.append(req)
-            State.Leader -> log.append(req)
-        }
+        return log.append(req)
     }
 
     suspend fun vote(req: VoteRequest): VoteResponse {
-        if (checkVoteIsHigherTerm(req)) {
+        tk.logger.info("Vote Request: $req, LOG: $log")
+        if (req.term > log.term()) {
             fsm.transition(Event.HigherTermServer)
         }
-        return when (fsm.state) {
-            State.Follower -> log.vote(req)
-            State.Candidate -> log.vote(req)
-            State.Leader -> log.vote(req)
-        }
+        return log.vote(req)
     }
 
     private suspend fun becomeFollower() {
@@ -86,20 +82,56 @@ class Node(private val tk: Toolkit) {
         }
     }
 
-    private suspend fun checkAppendIsHigherTerm(req: AppendRequest): Boolean {
-        TODO()
-    }
-
-    private suspend fun checkVoteIsHigherTerm(req: VoteRequest): Boolean {
-        TODO()
-    }
-
     private suspend fun requestVotes(): Int {
-        TODO()
+        val results = channelFlow {
+            tk.stubs.map { (client, info) ->
+                launch {
+                    send(requestVote(client, info))
+                }
+            }
+        }
+
+        return results.count { it == 1 }
+    }
+
+    // Return 1 if vote granted, else 0. Perform error checking on returned value
+    private suspend fun requestVote(client: Int, info: PeerInfo): Int {
+        tk.logger.info("Requesting vote from $client")
+        val req = log.buildVoteRequest(tk.port)
+        val res = info.raftStub.vote(req)
+
+        if (res.term > log.term()) {
+            fsm.transition(Event.HigherTermServer)
+        }
+
+        return if (res.voteGranted) {
+            1
+        } else {
+            0
+        }
     }
 
     private suspend fun refreshFollowers() {
-        TODO()
+        coroutineScope {
+            for ((client, info) in tk.stubs) {
+                val newInfo = refreshFollower(client, info)
+                tk.stubs[client] = newInfo
+            }
+        }
+    }
+
+    private suspend fun refreshFollower(client: Int, info: PeerInfo): PeerInfo {
+        tk.logger.info("Refreshing follower $client")
+        val req = log.buildAppendRequest(tk.port)
+        val res = info.raftStub.append(req)
+
+        if (res.term > log.term()) {
+            fsm.transition(Event.HigherTermServer)
+        }
+
+        // TODO: Reconcile log if follower is behind
+
+        return info.copy()
     }
 
     // Exported to non suspending code

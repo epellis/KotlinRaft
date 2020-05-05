@@ -55,4 +55,21 @@ class LogTest : StringSpec({
             .setSuccess(true)
             .build()
     }
+
+    "test build vote" {
+        val candidateID = 0
+        val currentTerm = 0
+        val internalLog = mockk<MutableList<Entry>>()
+
+        every { internalLog.size } returns 0
+        every { internalLog.isEmpty() } returns true
+
+        val log = Log(term = currentTerm, log = internalLog)
+
+        val req = log.buildVoteRequest(candidateID)
+        req.term shouldBe currentTerm
+        req.candidateID shouldBe candidateID
+        req.lastLogIndex shouldBe internalLog.size
+        req.lastLogTerm shouldBe 0
+    }
 })
