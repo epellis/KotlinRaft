@@ -1,10 +1,8 @@
 package com.nedellis.kotlinraft
 
-import kotlinx.coroutines.*
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
+import kotlinx.coroutines.*
 
 const val FOLLOWER_TIMEOUT = 5000L
 const val CANDIDATE_TIMEOUT = 1000L
@@ -25,22 +23,30 @@ data class Contexts(
     }
 }
 
-class Node {
+class Node(private val tk: Toolkit) {
     private val ctx = Contexts()
     private val fsm = FSM(ctx, ::blockingBecomeFollower, ::blockingBecomeCandidate, ::blockingBecomeLeader)
-    private val mutex = Mutex()
     private val log = Log()
-    private val vote = Vote()
 
     suspend fun append(req: AppendRequest): AppendResponse {
-        mutex.withLock {
-            return log.append(req)
+        if (checkAppendIsHigherTerm(req)) {
+            fsm.transition(Event.HigherTermServer)
+        }
+        return when (fsm.state) {
+            State.Follower -> log.append(req)
+            State.Candidate -> log.append(req)
+            State.Leader -> log.append(req)
         }
     }
 
     suspend fun vote(req: VoteRequest): VoteResponse {
-        mutex.withLock {
-            return vote.vote(req)
+        if (checkVoteIsHigherTerm(req)) {
+            fsm.transition(Event.HigherTermServer)
+        }
+        return when (fsm.state) {
+            State.Follower -> log.vote(req)
+            State.Candidate -> log.vote(req)
+            State.Leader -> log.vote(req)
         }
     }
 
@@ -78,6 +84,14 @@ class Node {
                 fsm.transition(Event.LeaderRefreshTimer)
             }
         }
+    }
+
+    private suspend fun checkAppendIsHigherTerm(req: AppendRequest): Boolean {
+        TODO()
+    }
+
+    private suspend fun checkVoteIsHigherTerm(req: VoteRequest): Boolean {
+        TODO()
     }
 
     private suspend fun requestVotes(): Int {

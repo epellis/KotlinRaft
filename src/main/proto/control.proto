@@ -11,11 +11,6 @@ package kotlinraft;
 service Control {
   rpc UpdateEntry (Entry) returns (UpdateStatus) {}
   rpc GetEntry (Key) returns (GetStatus) {} // If nothing at key found, entry will be uninitialized
-  rpc IdleClient (Nothing) returns (Nothing) {}
-  rpc WakeClient (Nothing) returns (Nothing) {}
-}
-
-message Nothing {
 }
 
 message Entry {
