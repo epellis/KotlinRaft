@@ -14,55 +14,65 @@ data class Log(
     private val mutex: Mutex = Mutex()
 ) {
     // Attempt to append entries to the log
-    suspend fun append(req: AppendRequest): AppendResponse {
-        mutex.withLock {
-            // 1. If term < currentTerm, reply false
-            if (req.term < term) {
-                return AppendResponse.newBuilder().setSuccess(false).setTerm(term).build()
-            }
-
-            // 2. If log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm, reply false
-            if (log.size < req.prevLogIndex || (req.prevLogIndex > 0 && log[req.prevLogIndex].term != req.prevLogTerm)) {
-                return AppendResponse.newBuilder().setSuccess(false).setTerm(term).build()
-            }
-
-            // 3. If an existing entry conflicts with a new one, delete the existing entry and all that follow it
-            // TODO: Skip for now, implement later for faster append
-
-            // 4. Append any new entries not already in log
-            log = log.subList(0, req.prevLogIndex)
-            log.addAll(req.entriesList)
-
-            // 5. If leader's commit is > commitIndex, set commitIndex = min(leaderCommit, index of new last entry)
-            if (req.leaderCommit > commitIndex) {
-                commitIndex = min(req.leaderCommit, log.size)
-            }
-
-            return AppendResponse.newBuilder().setSuccess(true).setTerm(term).build()
+    suspend fun append(req: AppendRequest): AppendResponse = mutex.withLock {
+        // 1. If term < currentTerm, reply false
+        if (req.term < term) {
+            return AppendResponse.newBuilder().setSuccess(false).setTerm(term).build()
         }
+
+        // 2. If log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm, reply false
+        if (log.size < req.prevLogIndex || (req.prevLogIndex > 0 && log[req.prevLogIndex].term != req.prevLogTerm)) {
+            return AppendResponse.newBuilder().setSuccess(false).setTerm(term).build()
+        }
+
+        // 3. If an existing entry conflicts with a new one, delete the existing entry and all that follow it
+        // TODO: Skip for now, implement later for faster append
+
+        // 4. Append any new entries not already in log
+        log = log.subList(0, req.prevLogIndex)
+        log.addAll(req.entriesList)
+
+        // 5. If leader's commit is > commitIndex, set commitIndex = min(leaderCommit, index of new last entry)
+        if (req.leaderCommit > commitIndex) {
+            commitIndex = min(req.leaderCommit, log.size)
+        }
+
+        return AppendResponse.newBuilder().setSuccess(true).setTerm(term).build()
     }
 
-    suspend fun term(): Int {
-        mutex.withLock {
-            return term
-        }
+    suspend fun term(): Int = mutex.withLock {
+        return term
     }
 
     // Attempt to retrieve entries from the log
-    suspend fun get(key: Key): GetStatus {
-        mutex.withLock {
-            val res = find(key).getOrNull()
-            return if (res != null) {
-                GetStatus.newBuilder().setStatus(GetStatus.Status.OK).setValue(res).build()
-            } else {
-                GetStatus.newBuilder().setStatus(GetStatus.Status.NOT_FOUND).build()
-            }
+    suspend fun get(key: Key): GetStatus = mutex.withLock {
+        val res = find(key).getOrNull()
+        return if (res != null) {
+            GetStatus.newBuilder().setStatus(GetStatus.Status.OK).setValue(res).build()
+        } else {
+            GetStatus.newBuilder().setStatus(GetStatus.Status.NOT_FOUND).build()
         }
     }
 
-    suspend fun vote(req: VoteRequest): VoteResponse {
-        mutex.withLock {
-            return VoteResponse.newBuilder().setTerm(0).setVoteGranted(false).build()
+    suspend fun vote(req: VoteRequest): VoteResponse = mutex.withLock {
+        // 1. Reply false if term < currentTerm
+        if (req.term < term) {
+            return VoteResponse.newBuilder().setTerm(term).setVoteGranted(false).build()
+        }
+
+        // 2. If votedFor is null or candidateID, and candidate's log is at least as up-to-date as receiver's log
+        // grant vote
+        val lastLogTerm = if (log.isEmpty()) {
+            0
+        } else {
+            log.last().term
+        }
+
+        if ((votedFor == null || votedFor == req.candidateID) && req.term >= term && req.lastLogIndex >= log.size && req.lastLogTerm >= lastLogTerm) {
+            votedFor = req.candidateID
+            return VoteResponse.newBuilder().setTerm(term).setVoteGranted(true).build()
+        } else {
+            return VoteResponse.newBuilder().setTerm(term).setVoteGranted(false).build()
         }
     }
 
@@ -73,7 +83,7 @@ data class Log(
             log.last().term
         }
 
-        println("Appending from $prevLogIndex to ${log.size-1}")
+        println("Appending from $prevLogIndex to ${log.size - 1}")
         val delta = if (log.isEmpty()) {
             listOf()
         } else {
@@ -108,13 +118,11 @@ data class Log(
     // Starting at the back of the log, try to find the first entry, and return success if not deleted
     // TODO: Do not examine entries that are not committed
     // TODO: Speedup with checkpoint hash table
-    private suspend fun find(key: Key): Result<String> {
-        mutex.withLock {
-            for (entry in log.reversed()) {
-                if (entry.key == key.key && entry.action == Entry.Action.APPEND) return Result.success(entry.key)
-                if (entry.key == key.key && entry.action == Entry.Action.DELETE) return Result.failure(Exception())
-            }
-            return Result.failure(Exception())
+    private fun find(key: Key): Result<String> {
+        for (entry in log.reversed()) {
+            if (entry.key == key.key && entry.action == Entry.Action.APPEND) return Result.success(entry.key)
+            if (entry.key == key.key && entry.action == Entry.Action.DELETE) return Result.failure(Exception())
         }
+        return Result.failure(Exception())
     }
 }

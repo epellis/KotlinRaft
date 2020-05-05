@@ -133,4 +133,73 @@ class LogTest : StringSpec({
         req.entriesList shouldBe listOf(lastEntry)
         req.leaderCommit shouldBe leaderCommit
     }
+
+    "test fresh vote request" {
+        val currentTerm = 0
+        val candidateID = 0
+        val req = mockk<VoteRequest>()
+
+        every { req.candidateID } returns candidateID
+        every { req.term } returns currentTerm
+        every { req.lastLogIndex } returns 0
+        every { req.lastLogTerm } returns 0
+
+        val log = Log(term = currentTerm, votedFor = null)
+        val res = log.vote(req)
+        res.term shouldBe currentTerm
+        res.voteGranted shouldBe true
+    }
+
+    "test ongoing vote request" {
+        val currentTerm = 0
+        val candidateID = 32
+        val req = mockk<VoteRequest>()
+
+        every { req.candidateID } returns candidateID
+        every { req.term } returns currentTerm
+        every { req.lastLogIndex } returns 0
+        every { req.lastLogTerm } returns 0
+
+        val log = Log(term = currentTerm, votedFor = candidateID)
+        val res = log.vote(req)
+        res.term shouldBe currentTerm
+        res.voteGranted shouldBe true
+    }
+
+    "test ongoing vote request bad term" {
+        val currentTerm = 5
+        val candidateID = 32
+        val req = mockk<VoteRequest>()
+
+        every { req.candidateID } returns candidateID
+        every { req.term } returns 0
+        every { req.lastLogIndex } returns 0
+        every { req.lastLogTerm } returns 1
+
+        val log = Log(term = currentTerm, votedFor = candidateID)
+
+        val res = log.vote(req)
+        res.term shouldBe currentTerm
+        res.voteGranted shouldBe false
+    }
+
+    "test ongoing vote request bad log size" {
+        val currentTerm = 5
+        val candidateID = 32
+        val internalLogEntry = mockk<Entry>()
+        val internalLog = listOf(internalLogEntry).toMutableList()
+        val req = mockk<VoteRequest>()
+
+        every { internalLogEntry.term } returns 1
+        every { req.candidateID } returns candidateID
+        every { req.term } returns 0
+        every { req.lastLogIndex } returns 0
+        every { req.lastLogTerm } returns 1
+
+        val log = Log(term = currentTerm, votedFor = candidateID, log = internalLog)
+
+        val res = log.vote(req)
+        res.term shouldBe currentTerm
+        res.voteGranted shouldBe false
+    }
 })

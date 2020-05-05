@@ -9,8 +9,10 @@ class Raft(private val port: Int, private val clients: List<Int>) {
     private val logger = LoggerFactory.getLogger("Raft $port")
     private val tk = Toolkit(logger, port, stubs)
 
+    @ExperimentalCoroutinesApi
     private val node = Node(tk)
 
+    @ExperimentalCoroutinesApi
     suspend fun run() = coroutineScope {
         launch(Dispatchers.IO) {
             ServerBuilder.forPort(port)
@@ -30,10 +32,12 @@ class Raft(private val port: Int, private val clients: List<Int>) {
 
 private class RaftService(private val node: Node) :
     RaftGrpcKt.RaftCoroutineImplBase() {
+    @ExperimentalCoroutinesApi
     override suspend fun append(request: AppendRequest): AppendResponse {
         return node.append(request)
     }
 
+    @ExperimentalCoroutinesApi
     override suspend fun vote(request: VoteRequest): VoteResponse {
         return node.vote(request)
     }
