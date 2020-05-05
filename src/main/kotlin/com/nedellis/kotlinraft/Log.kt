@@ -66,14 +66,28 @@ data class Log(
         }
     }
 
-    fun buildAppendRequest(myId: Int): AppendRequest {
+    fun buildAppendRequest(myId: Int, prevLogIndex: Int, leaderCommit: Int): AppendRequest {
+        val prevLogTerm = if (log.isEmpty()) {
+            0
+        } else {
+            log.last().term
+        }
+
+        println("Appending from $prevLogIndex to ${log.size-1}")
+        val delta = if (log.isEmpty()) {
+            listOf()
+        } else {
+            log.slice(prevLogIndex until log.size)
+        }
+        println("Delta is $delta")
+
         return AppendRequest.newBuilder()
-//            .setTerm(term)
-//            .setLeaderID(myId)
-//            .setPrevLogIndex()
-//            .setPrevLogTerm()
-//            .addAllEntries()
-//            .setLeaderCommit()
+            .setTerm(term)
+            .setLeaderID(myId)
+            .setPrevLogIndex(prevLogIndex)
+            .setPrevLogTerm(prevLogTerm)
+            .addAllEntries(delta)
+            .setLeaderCommit(leaderCommit)
             .build()
     }
 

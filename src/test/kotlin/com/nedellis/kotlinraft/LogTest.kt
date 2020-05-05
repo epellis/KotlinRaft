@@ -94,4 +94,43 @@ class LogTest : StringSpec({
         req.lastLogIndex shouldBe internalLog.size
         req.lastLogTerm shouldBe lastEntryTerm
     }
+
+    "test fresh append request" {
+        val leaderID = 0
+        val currentTerm = 0
+        val prevLogIndex = 0
+        val leaderCommit = 0
+        val internalLog = emptyList<Entry>().toMutableList()
+
+        val log = Log(term = currentTerm, log = internalLog)
+
+        val req = log.buildAppendRequest(leaderID, prevLogIndex, leaderCommit)
+        req.term shouldBe currentTerm
+        req.leaderID shouldBe leaderID
+        req.prevLogIndex shouldBe prevLogIndex
+        req.entriesList.isEmpty() shouldBe true
+        req.leaderCommit shouldBe leaderCommit
+    }
+
+    // Add the additional entry at index 1 to the follower's list
+    "test ongoing append request" {
+        val leaderID = 0
+        val currentTerm = 5
+        val prevLogIndex = 1
+        val leaderCommit = 2
+        val lastEntryTerm = 3
+        val lastEntry = mockk<Entry>()
+        val internalLog = listOf(lastEntry, lastEntry).toMutableList()
+
+        every { lastEntry.term } returns lastEntryTerm
+
+        val log = Log(term = currentTerm, log = internalLog)
+
+        val req = log.buildAppendRequest(leaderID, prevLogIndex, leaderCommit)
+        req.term shouldBe currentTerm
+        req.leaderID shouldBe leaderID
+        req.prevLogIndex shouldBe prevLogIndex
+        req.entriesList shouldBe listOf(lastEntry)
+        req.leaderCommit shouldBe leaderCommit
+    }
 })

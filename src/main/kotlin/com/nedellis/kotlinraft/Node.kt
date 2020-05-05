@@ -122,7 +122,7 @@ class Node(private val tk: Toolkit) {
 
     private suspend fun refreshFollower(client: Int, info: PeerInfo): PeerInfo {
         tk.logger.info("Refreshing follower $client")
-        val req = log.buildAppendRequest(tk.port)
+        val req = log.buildAppendRequest(tk.port, 0, 0) // TODO
         val res = info.raftStub.append(req)
 
         if (res.term > log.term()) {
