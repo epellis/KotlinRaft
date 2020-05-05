@@ -30,6 +30,7 @@ object FSM {
         toLeader: () -> Unit
     ): StateMachine<State, Event, SideEffect> {
         return StateMachine.create<State, Event, SideEffect> {
+            initialState(State.Follower)
             state<State.Follower> {
                 on<Event.FollowerTimeout> {
                     transitionTo(State.Candidate, SideEffect.BecomeCandidate)

@@ -21,6 +21,10 @@ class Raft(private val port: Int, private val clients: List<Int>) {
                 .start()
                 .awaitTermination()
         }
+
+        launch(Dispatchers.IO) {
+            node.run()
+        }
     }
 }
 

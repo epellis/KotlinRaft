@@ -30,6 +30,8 @@ class Node(private val tk: Toolkit) {
     private val fsm = FSM(ctx, ::blockingBecomeFollower, ::blockingBecomeCandidate, ::blockingBecomeLeader)
     private val log = Log()
 
+    suspend fun run() = becomeFollower()
+
     suspend fun append(req: AppendRequest): AppendResponse {
         tk.logger.info("Append Request: $req, LOG: $log")
         if (req.term > log.term()) {
@@ -47,6 +49,7 @@ class Node(private val tk: Toolkit) {
     }
 
     private suspend fun becomeFollower() {
+        tk.logger.info("BecomeFollower")
         withContext(ctx.follower) {
             launch {
                 delay(FOLLOWER_TIMEOUT)
@@ -56,6 +59,7 @@ class Node(private val tk: Toolkit) {
     }
 
     private suspend fun becomeCandidate() {
+        tk.logger.info("BecomeCandidate")
         withContext(ctx.candidate) {
             launch {
                 val votesReceived = requestVotes()
@@ -70,6 +74,7 @@ class Node(private val tk: Toolkit) {
     }
 
     private suspend fun becomeLeader() {
+        tk.logger.info("BecomeLeader")
         withContext(ctx.leader) {
             launch {
                 refreshFollowers()
