@@ -202,4 +202,6 @@ class LogTest : StringSpec({
         res.term shouldBe currentTerm
         res.voteGranted shouldBe false
     }
+
+    // TODO: Test multiple vote requests
 })

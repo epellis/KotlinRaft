@@ -4,6 +4,7 @@ import java.lang.Exception
 import kotlin.math.min
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.slf4j.Logger
 
 // TODO: Investigate making everything immutable
 data class Log(
@@ -11,7 +12,9 @@ data class Log(
     private var term: Int = 0,
     private var votedFor: Int? = null,
     private var commitIndex: Int = 0,
-    private val mutex: Mutex = Mutex()
+    private var leaderCommit: Int = 0,
+    private val mutex: Mutex = Mutex(),
+    private val logger: Logger? = null
 ) {
     // Attempt to append entries to the log
     suspend fun append(req: AppendRequest): AppendResponse = mutex.withLock {
@@ -44,6 +47,10 @@ data class Log(
         return term
     }
 
+    suspend fun leaderCommit(): Int = mutex.withLock {
+        return leaderCommit
+    }
+
     // Attempt to retrieve entries from the log
     suspend fun get(key: Key): GetStatus = mutex.withLock {
         val res = find(key).getOrNull()
@@ -54,42 +61,45 @@ data class Log(
         }
     }
 
+    suspend fun changeTerm(newTerm: Int) = mutex.withLock {
+        // TODO: Assert term is increasing
+        term = newTerm
+    }
+
+    suspend fun voteForSelf(myId: Int) = mutex.withLock {
+        // TODO: Assert that have not voted for anyone else
+        votedFor = myId
+    }
+
     suspend fun vote(req: VoteRequest): VoteResponse = mutex.withLock {
         // 1. Reply false if term < currentTerm
         if (req.term < term) {
+            logger?.info("Denying vote for ${req.candidateID} because term is too low")
             return VoteResponse.newBuilder().setTerm(term).setVoteGranted(false).build()
         }
 
-        // 2. If votedFor is null or candidateID, and candidate's log is at least as up-to-date as receiver's log
-        // grant vote
-        val lastLogTerm = if (log.isEmpty()) {
-            0
-        } else {
-            log.last().term
+        // 2.1 If already voted for another candidate, reply false
+        if (votedFor != null && votedFor != req.candidateID) {
+            logger?.info("Denying vote for ${req.candidateID} because already voted for $votedFor")
+            return VoteResponse.newBuilder().setTerm(term).setVoteGranted(false).build()
         }
 
-        if ((votedFor == null || votedFor == req.candidateID) && req.term >= term && req.lastLogIndex >= log.size && req.lastLogTerm >= lastLogTerm) {
+        // 2.2 Reply true if candidate's log is at least as up-to-date as receiver's log
+        val lastLogTerm = if (log.isEmpty()) 0 else log.last().term
+        return if (req.term >= term && req.lastLogIndex >= log.size && req.lastLogTerm >= lastLogTerm) {
             votedFor = req.candidateID
-            return VoteResponse.newBuilder().setTerm(term).setVoteGranted(true).build()
+            VoteResponse.newBuilder().setTerm(term).setVoteGranted(true).build()
         } else {
-            return VoteResponse.newBuilder().setTerm(term).setVoteGranted(false).build()
+            logger?.info("Denying vote for ${req.candidateID} because it's index is ${req.lastLogIndex}, mine is ${log.size}")
+            logger?.info("Denying vote for ${req.candidateID} because it's term is ${req.lastLogTerm}, mine is $lastLogTerm")
+            VoteResponse.newBuilder().setTerm(term).setVoteGranted(false).build()
         }
     }
 
     fun buildAppendRequest(myId: Int, prevLogIndex: Int, leaderCommit: Int): AppendRequest {
-        val prevLogTerm = if (log.isEmpty()) {
-            0
-        } else {
-            log.last().term
-        }
+        val prevLogTerm = if (log.isEmpty()) 0 else log.last().term
 
-        println("Appending from $prevLogIndex to ${log.size - 1}")
-        val delta = if (log.isEmpty()) {
-            listOf()
-        } else {
-            log.slice(prevLogIndex until log.size)
-        }
-        println("Delta is $delta")
+        val delta = if (log.isEmpty()) listOf() else log.slice(prevLogIndex until log.size)
 
         return AppendRequest.newBuilder()
             .setTerm(term)
@@ -102,11 +112,7 @@ data class Log(
     }
 
     fun buildVoteRequest(myId: Int): VoteRequest {
-        val lastLogTerm = if (log.isEmpty()) {
-            0
-        } else {
-            log.last().term
-        }
+        val lastLogTerm = if (log.isEmpty()) 0 else log.last().term
         return VoteRequest.newBuilder()
             .setCandidateID(myId)
             .setTerm(term)
