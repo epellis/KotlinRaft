@@ -10,6 +10,7 @@ sealed class State {
 }
 
 sealed class Event {
+    object FollowerUpdated : Event()
     object FollowerTimeout : Event()
     object CandidateTimeout : Event()
     object CandidateReceivesMajority : Event()
@@ -30,6 +31,9 @@ object FSM {
         return StateMachine.create<State, Event, SideEffect> {
             initialState(State.Follower)
             state<State.Follower> {
+                on<Event.FollowerUpdated> {
+                    transitionTo(State.Follower, SideEffect.BecomeFollower)
+                }
                 on<Event.FollowerTimeout> {
                     transitionTo(State.Candidate, SideEffect.BecomeCandidate)
                 }

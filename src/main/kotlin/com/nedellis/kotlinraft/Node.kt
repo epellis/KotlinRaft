@@ -24,7 +24,6 @@ class Node(private val tk: Toolkit) {
         launch {
             while (true) {
                 val effect = changeStateChan.receive()
-                tk.logger.info("Effect: $effect")
                 ctx?.cancel()
                 ctx = launch {
                     when (effect) {
@@ -41,7 +40,7 @@ class Node(private val tk: Toolkit) {
     }
 
     suspend fun append(req: AppendRequest): AppendResponse {
-        tk.logger.info("Append Request: $req, LOG: $log")
+//        tk.logger.info("Append Request: $req, LOG: $log")
         if (req.term > log.term()) {
             log.changeTerm(req.term)
             fsm.transition(Event.HigherTermServer)
@@ -49,20 +48,19 @@ class Node(private val tk: Toolkit) {
         if (req.term == log.term() && fsm.state == State.Candidate) {
             fsm.transition(Event.HigherTermServer)
         }
-        return log.append(req).also {
-            tk.logger.info("Returning Append Request: $it")
+        if (fsm.state == State.Follower) {
+            fsm.transition(Event.FollowerUpdated)
         }
+        return log.append(req)
     }
 
     suspend fun vote(req: VoteRequest): VoteResponse {
-        tk.logger.info("Vote Request: $req, LOG: $log")
+//        tk.logger.info("Vote Request: $req, LOG: $log")
         if (req.term > log.term()) {
             log.changeTerm(req.term)
             fsm.transition(Event.HigherTermServer)
         }
-        return log.vote(req).also {
-            tk.logger.info("Returning Vote: $it")
-        }
+        return log.vote(req)
     }
 
     private suspend fun becomeFollower() = coroutineScope {
@@ -81,7 +79,6 @@ class Node(private val tk: Toolkit) {
         launch {
             val majority = (tk.stubs.size + 1.0) / 2.0
             val electionWon = requestVotes(majority)
-            tk.logger.info("Won Election?: $electionWon")
 
             if (electionWon) {
                 fsm.transition(Event.CandidateReceivesMajority)
