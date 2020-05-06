@@ -1,9 +1,13 @@
 package com.nedellis.kotlinraft
 
+import io.kotest.assertions.throwables.shouldNotThrow
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
+import io.kotest.fp.success
 import io.kotest.matchers.shouldBe
 import io.mockk.every
 import io.mockk.mockk
+import java.lang.IllegalArgumentException
 
 class LogTest : StringSpec({
     "empty log refresh" {
@@ -204,4 +208,45 @@ class LogTest : StringSpec({
     }
 
     // TODO: Test multiple vote requests
+    // TODO: Request builders or at least constant definitions
+
+    "increment term resets votedFor" {
+        // TODO: Decouple so not having to test voting to see that can vote
+        val currentVotedFor = 32
+        val currentTerm = 16
+        val newTerm = 18
+        val voteRequest = mockk<VoteRequest>()
+        val log = Log(votedFor = currentVotedFor, term = currentTerm)
+
+        every { voteRequest.term } returns newTerm
+        every { voteRequest.candidateID } returns 0
+        every { voteRequest.lastLogIndex } returns 0
+        every { voteRequest.lastLogTerm } returns 0
+
+        log.changeTerm(newTerm)
+        val res = log.vote(voteRequest)
+
+        res.voteGranted shouldBe true
+        res.term shouldBe newTerm
+    }
+
+    "can only increment term" {
+        val currentTerm = 16
+        val lowerTerm = 14
+        val sameTerm = 16
+        val higherTerm = 18
+        val log = Log(term = currentTerm)
+
+        shouldThrow<IllegalArgumentException> {
+            log.changeTerm(lowerTerm)
+        }
+        shouldThrow<IllegalArgumentException> {
+            log.changeTerm(sameTerm)
+        }
+        shouldNotThrow<IllegalArgumentException> {
+            log.changeTerm(higherTerm)
+        }
+
+        log.term() shouldBe higherTerm
+    }
 })

@@ -1,14 +1,11 @@
 package com.nedellis.kotlinraft
 
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.singleOrNull
-import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.selects.select
-import java.util.concurrent.atomic.AtomicInteger
 
 const val FOLLOWER_TIMEOUT = 5000L
-const val CANDIDATE_DELAY_MAX = 3000L
+const val CANDIDATE_DELAY_MAX = 100L
 const val CANDIDATE_TIMEOUT = 1000L
 const val LEADER_TIMEOUT = 1000L
 
@@ -63,6 +60,14 @@ class Node(private val tk: Toolkit) {
         return log.vote(req)
     }
 
+    suspend fun getEntry(request: Key): GetStatus {
+        return log.get(request)
+    }
+
+    suspend fun updateEntry(request: Entry): UpdateStatus {
+        TODO()
+    }
+
     private suspend fun becomeFollower() = coroutineScope {
         tk.logger.info("BecomeFollower")
         delay(FOLLOWER_TIMEOUT)
@@ -72,8 +77,8 @@ class Node(private val tk: Toolkit) {
 
     private suspend fun becomeCandidate() = coroutineScope {
         tk.logger.info("BecomeCandidate")
-        log.changeTerm(log.term() + 1)
         delay((0L..CANDIDATE_DELAY_MAX).random().also { tk.logger.info("Delaying for $it ms") })
+        log.changeTerm(log.term() + 1)
         log.voteForSelf(tk.port)
 
         launch {
@@ -136,6 +141,7 @@ class Node(private val tk: Toolkit) {
         val res = info.raftStub.vote(req)
 
         if (res.term > log.term()) {
+            tk.logger.info("Vote: $client has term ${res.term} my term is ${log.term()}")
             fsm.transition(Event.HigherTermServer)
         }
 
@@ -157,6 +163,7 @@ class Node(private val tk: Toolkit) {
         val res = info.raftStub.append(req)
 
         if (res.term > log.term()) {
+            tk.logger.info("Refresh: $client has term ${res.term} my term is ${log.term()}")
             fsm.transition(Event.HigherTermServer)
         }
 

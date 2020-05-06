@@ -17,7 +17,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
         launch(Dispatchers.IO) {
             ServerBuilder.forPort(port)
                 .addService(RaftService(node))
-//                .addService(ControlService(gRPCtoCoordinatorChan, logger))
+                .addService(ControlService(node))
                 .executor(Dispatchers.IO.asExecutor())
                 .build()
                 .start()
@@ -30,8 +30,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
     }
 }
 
-private class RaftService(private val node: Node) :
-    RaftGrpcKt.RaftCoroutineImplBase() {
+private class RaftService(private val node: Node) : RaftGrpcKt.RaftCoroutineImplBase() {
     @ExperimentalCoroutinesApi
     override suspend fun append(request: AppendRequest): AppendResponse {
         return node.append(request)
@@ -40,5 +39,17 @@ private class RaftService(private val node: Node) :
     @ExperimentalCoroutinesApi
     override suspend fun vote(request: VoteRequest): VoteResponse {
         return node.vote(request)
+    }
+}
+
+private class ControlService(private val node: Node) : ControlGrpcKt.ControlCoroutineImplBase() {
+    @ExperimentalCoroutinesApi
+    override suspend fun getEntry(request: Key): GetStatus {
+        return node.getEntry(request)
+    }
+
+    @ExperimentalCoroutinesApi
+    override suspend fun updateEntry(request: Entry): UpdateStatus {
+        return node.updateEntry(request)
     }
 }

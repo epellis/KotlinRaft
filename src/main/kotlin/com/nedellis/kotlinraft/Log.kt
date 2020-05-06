@@ -1,6 +1,7 @@
 package com.nedellis.kotlinraft
 
 import java.lang.Exception
+import java.lang.IllegalArgumentException
 import kotlin.math.min
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -62,7 +63,10 @@ data class Log(
     }
 
     suspend fun changeTerm(newTerm: Int) = mutex.withLock {
-        // TODO: Assert term is increasing
+        if (newTerm <= term) {
+            throw IllegalArgumentException("$newTerm is not greater than $term")
+        }
+        votedFor = null
         term = newTerm
     }
 
