@@ -1,6 +1,7 @@
 package com.nedellis.kotlinraft
 
 import com.tinder.StateMachine
+import kotlinx.coroutines.channels.SendChannel
 
 sealed class State {
     object Follower : State()
@@ -24,7 +25,7 @@ sealed class SideEffect {
 
 object FSM {
     operator fun invoke(
-        changeState: (SideEffect) -> Boolean
+        changeState: SendChannel<SideEffect>
     ): StateMachine<State, Event, SideEffect> {
         return StateMachine.create<State, Event, SideEffect> {
             initialState(State.Follower)
@@ -52,10 +53,11 @@ object FSM {
                     transitionTo(State.Follower, SideEffect.BecomeFollower)
                 }
             }
+            // Automatically validate if transition is okay, if it is then callback to node
             onTransition {
                 val validTransition = it as? StateMachine.Transition.Valid ?: return@onTransition
                 val sideEffect = validTransition.sideEffect ?: return@onTransition
-                changeState(sideEffect)
+                changeState.offer(sideEffect)
             }
         }
     }

@@ -1,11 +1,11 @@
 package com.nedellis.kotlinraft
 
-import com.google.protobuf.Empty
-import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.singleOrNull
 import kotlinx.coroutines.flow.*
-import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.selects.select
+import java.util.concurrent.atomic.AtomicInteger
 
 const val FOLLOWER_TIMEOUT = 5000L
 const val CANDIDATE_DELAY_MAX = 3000L
@@ -15,20 +15,23 @@ const val LEADER_TIMEOUT = 1000L
 @ExperimentalCoroutinesApi
 class Node(private val tk: Toolkit) {
     private var ctx: Job? = null
-    private val fsm = FSM(::changeState)
+    private val changeStateChan = Channel<SideEffect>(Channel.CONFLATED) // Last Write Wins
+    private val fsm = FSM(changeStateChan)
     private val log = Log(logger = tk.logger)
-    private val changeStateChan = Channel<SideEffect>(Channel.CONFLATED) // Last write wins
 
     suspend fun run() = coroutineScope {
         // Event loop listens for next state change event
         launch {
             while (true) {
                 val effect = changeStateChan.receive()
+                tk.logger.info("Effect: $effect")
                 ctx?.cancel()
-                ctx = when (effect) {
-                    SideEffect.BecomeFollower -> becomeFollower()
-                    SideEffect.BecomeCandidate -> becomeCandidate()
-                    SideEffect.BecomeLeader -> becomeLeader()
+                ctx = launch {
+                    when (effect) {
+                        SideEffect.BecomeFollower -> becomeFollower()
+                        SideEffect.BecomeCandidate -> becomeCandidate()
+                        SideEffect.BecomeLeader -> becomeLeader()
+                    }
                 }
             }
         }
@@ -37,11 +40,13 @@ class Node(private val tk: Toolkit) {
         changeStateChan.send(SideEffect.BecomeFollower)
     }
 
-    private fun changeState(effect: SideEffect): Boolean = changeStateChan.offer(effect)
-
     suspend fun append(req: AppendRequest): AppendResponse {
         tk.logger.info("Append Request: $req, LOG: $log")
         if (req.term > log.term()) {
+            log.changeTerm(req.term)
+            fsm.transition(Event.HigherTermServer)
+        }
+        if (req.term == log.term() && fsm.state == State.Candidate) {
             fsm.transition(Event.HigherTermServer)
         }
         return log.append(req).also {
@@ -52,6 +57,7 @@ class Node(private val tk: Toolkit) {
     suspend fun vote(req: VoteRequest): VoteResponse {
         tk.logger.info("Vote Request: $req, LOG: $log")
         if (req.term > log.term()) {
+            log.changeTerm(req.term)
             fsm.transition(Event.HigherTermServer)
         }
         return log.vote(req).also {
@@ -59,64 +65,71 @@ class Node(private val tk: Toolkit) {
         }
     }
 
-    private suspend fun becomeFollower(): Job = coroutineScope {
-        return@coroutineScope launch {
-            tk.logger.info("BecomeFollower")
-            delay(FOLLOWER_TIMEOUT)
-            tk.logger.info("Follower Timed Out")
-            fsm.transition(Event.FollowerTimeout)
-        }
+    private suspend fun becomeFollower() = coroutineScope {
+        tk.logger.info("BecomeFollower")
+        delay(FOLLOWER_TIMEOUT)
+        tk.logger.info("Follower Timed Out")
+        fsm.transition(Event.FollowerTimeout)
     }
 
-    private suspend fun becomeCandidate(): Job = coroutineScope {
-        return@coroutineScope launch {
-            tk.logger.info("BecomeCandidate")
-            log.changeTerm(log.term() + 1)
-            delay((0L..CANDIDATE_DELAY_MAX).random().also { tk.logger.info("Delaying for $it ms") })
-            log.voteForSelf(tk.port)
+    private suspend fun becomeCandidate() = coroutineScope {
+        tk.logger.info("BecomeCandidate")
+        log.changeTerm(log.term() + 1)
+        delay((0L..CANDIDATE_DELAY_MAX).random().also { tk.logger.info("Delaying for $it ms") })
+        log.voteForSelf(tk.port)
 
-            launch {
-                val votesReceived = requestVotes()
-                tk.logger.info("Received $votesReceived votes")
+        launch {
+            val majority = (tk.stubs.size + 1.0) / 2.0
+            val electionWon = requestVotes(majority)
+            tk.logger.info("Won Election?: $electionWon")
 
-                if (votesReceived >= (tk.stubs.size + 1.0) / 2.0) {
-                    fsm.transition(Event.CandidateReceivesMajority)
-                } else {
-                    fsm.transition(Event.CandidateTimeout)
-                }
-            }
-
-            launch {
-                delay(CANDIDATE_TIMEOUT)
+            if (electionWon) {
+                fsm.transition(Event.CandidateReceivesMajority)
+            } else {
                 fsm.transition(Event.CandidateTimeout)
             }
         }
-    }
 
-    private suspend fun becomeLeader(): Job = coroutineScope {
-        return@coroutineScope launch {
-            tk.logger.info("BecomeLeader")
-            launch {
-                refreshFollowers()
-            }
-
-            launch {
-                delay(LEADER_TIMEOUT)
-                fsm.transition(Event.LeaderRefreshTimer)
-            }
+        launch {
+            delay(CANDIDATE_TIMEOUT)
+            tk.logger.info("CandidateTimeout")
+            fsm.transition(Event.CandidateTimeout)
         }
     }
 
-    private suspend fun requestVotes(): Int {
-        val results = channelFlow {
+    private suspend fun becomeLeader() = coroutineScope {
+        tk.logger.info("BecomeLeader")
+        launch {
+            refreshFollowers()
+        }
+
+        launch {
+            delay(LEADER_TIMEOUT)
+            fsm.transition(Event.LeaderRefreshTimer)
+        }
+    }
+
+    private suspend fun requestVotes(majority: Double): Boolean = coroutineScope {
+        val count = AtomicInteger(1) // Always vote for self
+        val resultsChan = Channel<Boolean>()
+
+        val job = launch {
             tk.stubs.map { (client, info) ->
-                launch {
-                    send(requestVote(client, info))
+                async {
+                    val result = requestVote(client, info)
+                    if (result) {
+                        val currentVotes = count.incrementAndGet()
+                        if (currentVotes >= majority) {
+                            resultsChan.send(true)
+                        }
+                    }
                 }
-            }
+            }.awaitAll()
+
+            resultsChan.send(false)
         }
 
-        return results.count { it } + 1 // Always vote for self
+        return@coroutineScope resultsChan.receive().also { job.cancel() }
     }
 
     // Return true if vote granted, else false. Perform error checking on returned value
