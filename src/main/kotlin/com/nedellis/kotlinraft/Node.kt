@@ -52,7 +52,6 @@ class Node(private val tk: Toolkit) {
     }
 
     suspend fun vote(req: VoteRequest): VoteResponse {
-//        tk.logger.info("Vote Request: $req, LOG: $log")
         if (req.term > log.term()) {
             log.changeTerm(req.term)
             fsm.transition(Event.HigherTermServer)
@@ -67,7 +66,20 @@ class Node(private val tk: Toolkit) {
 
     suspend fun updateEntry(req: Entry): UpdateStatus {
         tk.logger.info("Updating state machine with $req")
-        return log.update(req)
+
+        val statusUnavailable = UpdateStatus.newBuilder().setStatus(UpdateStatus.Status.UNAVAILABLE).build()
+
+        return when (fsm.state) {
+            State.Leader -> log.update(req)
+            State.Candidate -> statusUnavailable
+            State.Follower -> {
+                val stub = log.leader()?.let {
+                    tk.stubs[it]?.controlStub
+                }
+                tk.logger.info("Passing request to leader: ${log.leader()}, $stub")
+                stub?.updateEntry(req) ?: statusUnavailable
+            }
+        }
     }
 
     private suspend fun becomeFollower() = coroutineScope {
