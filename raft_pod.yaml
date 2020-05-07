@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: raft
+spec:
+  replicas: 8
+  selector:
+    matchLabels:
+      app: raft
+  template:
+    metadata:
+      labels:
+        app: raft
+        version: "1"
+    spec:
+      containers:
+        - image: epelesis/raft:latest
+          name: raft
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP

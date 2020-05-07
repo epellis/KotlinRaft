@@ -214,19 +214,11 @@ class LogTest : StringSpec({
         val currentVotedFor = 32
         val currentTerm = 16
         val newTerm = 18
-        val voteRequest = mockk<VoteRequest>()
         val log = Log(votedFor = currentVotedFor, term = currentTerm)
 
-        every { voteRequest.term } returns newTerm
-        every { voteRequest.candidateID } returns 0
-        every { voteRequest.lastLogIndex } returns 0
-        every { voteRequest.lastLogTerm } returns 0
-
         log.changeTerm(newTerm)
-        val res = log.vote(voteRequest)
 
-        res.voteGranted shouldBe true
-        res.term shouldBe newTerm
+        log.leader() shouldBe null
     }
 
     "can only increment term" {

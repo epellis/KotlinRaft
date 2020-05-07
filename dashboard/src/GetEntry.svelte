@@ -25,7 +25,7 @@
       }
       if (res.getStatus() == GetStatus.Status.OK) {
         addNotification({
-          text: `${entryKey}\t=>\t${res.getEntry().getValue()}`,
+          text: `${entryKey}\t=>\t${res.getValue()}`,
           position: "bottom-center",
           type: "success",
           removeAfter: 3000

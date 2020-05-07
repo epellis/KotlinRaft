@@ -44,12 +44,21 @@ data class Log(
         return AppendResponse.newBuilder().setSuccess(true).setTerm(term).build()
     }
 
+    suspend fun update(req: Entry): UpdateStatus = mutex.withLock {
+        log.add(req)
+        return UpdateStatus.newBuilder().setStatus(UpdateStatus.Status.OK).build()
+    }
+
     suspend fun term(): Int = mutex.withLock {
         return term
     }
 
     suspend fun leaderCommit(): Int = mutex.withLock {
         return leaderCommit
+    }
+
+    suspend fun leader(): Int? = mutex.withLock {
+        votedFor
     }
 
     // Attempt to retrieve entries from the log
@@ -130,7 +139,7 @@ data class Log(
     // TODO: Speedup with checkpoint hash table
     private fun find(key: Key): Result<String> {
         for (entry in log.reversed()) {
-            if (entry.key == key.key && entry.action == Entry.Action.APPEND) return Result.success(entry.key)
+            if (entry.key == key.key && entry.action == Entry.Action.APPEND) return Result.success(entry.value)
             if (entry.key == key.key && entry.action == Entry.Action.DELETE) return Result.failure(Exception())
         }
         return Result.failure(Exception())

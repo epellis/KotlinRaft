@@ -60,12 +60,14 @@ class Node(private val tk: Toolkit) {
         return log.vote(req)
     }
 
-    suspend fun getEntry(request: Key): GetStatus {
-        return log.get(request)
+    suspend fun getEntry(req: Key): GetStatus {
+        tk.logger.info("Searching for $req")
+        return log.get(req)
     }
 
-    suspend fun updateEntry(request: Entry): UpdateStatus {
-        TODO()
+    suspend fun updateEntry(req: Entry): UpdateStatus {
+        tk.logger.info("Updating state machine with $req")
+        return log.update(req)
     }
 
     private suspend fun becomeFollower() = coroutineScope {
