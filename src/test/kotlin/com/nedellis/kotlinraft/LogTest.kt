@@ -1,243 +1,128 @@
 package com.nedellis.kotlinraft
 
-import io.kotest.assertions.throwables.shouldNotThrow
-import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
-import io.mockk.every
-import io.mockk.mockk
-import java.lang.IllegalArgumentException
+import io.kotest.properties.nextPrintableString
+import kotlin.random.Random
+
+fun buildMockVoteRequest(term: Int, candidateID: Int, lastLogIndex: Int, lastLogTerm: Int): VoteRequest {
+    return VoteRequest.newBuilder()
+        .setTerm(term)
+        .setCandidateID(candidateID)
+        .setLastLogIndex(lastLogIndex)
+        .setLastLogTerm(lastLogTerm)
+        .build()
+}
+
+fun buildMockEntry(
+    term: Int,
+    key: String = Random.nextPrintableString(10),
+    value: String = Random.nextPrintableString(10),
+    action: Entry.Action = Entry.Action.APPEND
+): Entry {
+    return Entry.newBuilder()
+        .setKey(key)
+        .setValue(value)
+        .setAction(action)
+        .setTerm(term)
+        .build()
+}
 
 class LogTest : StringSpec({
-    "empty log refresh" {
-        val req = mockk<AppendRequest>()
+    "Test deny vote if request term not up to date" {
+        val term = 0
+        val candidateID = Random.nextInt()
+        val lastLogIndex = Random.nextInt()
+        val lastLogTerm = Random.nextInt()
+        val id = Random.nextInt()
+        val voteRequest = buildMockVoteRequest(term, candidateID, lastLogIndex, lastLogTerm)
 
-        every { req.term } returns 0
-        every { req.leaderCommit } returns 0
-        every { req.prevLogIndex } returns 0
-        every { req.entriesList } returns listOf()
+        val logTerm = 10
+        val log = Log(id, term = logTerm)
 
-        val log = Log()
+        val (newLog, voteResponse) = log.vote(voteRequest)
 
-        log.append(req) shouldBe AppendResponse.newBuilder()
-            .setTerm(0)
-            .setSuccess(true)
-            .build()
+        voteResponse.voteGranted shouldBe false
+        newLog.term shouldBe logTerm
+        newLog.votedFor shouldBe null
     }
 
-    "single log refresh" {
-        val req = mockk<AppendRequest>()
-        val entry = mockk<Entry>()
+    "Test deny vote if already voted for another candidate" {
+        val term = Random.nextInt()
+        val candidateID = Random.nextInt()
+        val lastLogIndex = 0
+        val lastLogTerm = 0
+        val id = Random.nextInt()
+        val voteRequest = buildMockVoteRequest(term, candidateID, lastLogIndex, lastLogTerm)
 
-        every { req.term } returns 0
-        every { req.leaderCommit } returns 0
-        every { req.prevLogIndex } returns 0
-        every { req.entriesList } returns listOf(entry)
+        val votedFor = Random.nextInt()
+        val log = Log(id, term = term, votedFor = votedFor)
 
-        val log = Log()
+        val (newLog, voteResponse) = log.vote(voteRequest)
 
-        log.append(req) shouldBe AppendResponse.newBuilder()
-            .setTerm(0)
-            .setSuccess(true)
-            .build()
+        voteResponse.voteGranted shouldBe false
+        newLog.term shouldBe term
+        newLog.votedFor shouldBe votedFor
     }
 
-    "many log refresh" {
-        val req = mockk<AppendRequest>()
-        val entry = mockk<Entry>()
+    "Test deny vote if log is not up to date" {
+        val term = Random.nextInt()
+        val logInternalLog = listOf(buildMockEntry(term), buildMockEntry(term))
 
-        every { req.term } returns 0
-        every { req.leaderCommit } returns 0
-        every { req.prevLogIndex } returns 0
-        every { req.entriesList } returns listOf(entry, entry, entry)
+        val candidateID = Random.nextInt()
+        val lastLogIndex = logInternalLog.size - 1
+        val lastLogTerm = term - 1
+        val id = Random.nextInt()
+        val voteRequest = buildMockVoteRequest(term, candidateID, lastLogIndex, lastLogTerm)
+        val log = Log(id, term = term, log = logInternalLog)
 
-        val log = Log()
+        val (newLog, voteResponse) = log.vote(voteRequest)
 
-        log.append(req) shouldBe AppendResponse.newBuilder()
-            .setTerm(0)
-            .setSuccess(true)
-            .build()
+        voteResponse.voteGranted shouldBe false
+        newLog.term shouldBe term
+        newLog.log shouldBe logInternalLog
+        newLog.votedFor shouldBe null
     }
 
-    "test fresh build vote" {
-        val candidateID = 0
-        val currentTerm = 0
-        val internalLog = mockk<MutableList<Entry>>()
+    "Test confirm vote if request is valid" {
+        val term = Random.nextInt()
+        val logInternalLog = listOf(buildMockEntry(term), buildMockEntry(term))
 
-        every { internalLog.size } returns 0
-        every { internalLog.isEmpty() } returns true
+        val candidateID = Random.nextInt()
+        val lastLogIndex = logInternalLog.size
+        val id = Random.nextInt()
+        val voteRequest = buildMockVoteRequest(term, candidateID, lastLogIndex, term)
+        val log = Log(id, term = term, log = logInternalLog)
 
-        val log = Log(term = currentTerm, log = internalLog)
+        val (newLog, voteResponse) = log.vote(voteRequest)
 
-        val req = log.buildVoteRequest(candidateID)
-        req.term shouldBe currentTerm
-        req.candidateID shouldBe candidateID
-        req.lastLogIndex shouldBe internalLog.size
-        req.lastLogTerm shouldBe 0
+        voteResponse.voteGranted shouldBe true
+        newLog.term shouldBe term
+        newLog.log shouldBe logInternalLog
+        newLog.votedFor shouldBe candidateID
     }
 
-    "test ongoing build vote" {
-        val candidateID = 0
-        val currentTerm = 5
-        val lastEntryTerm = 3
-        val internalLog = mockk<MutableList<Entry>>()
-        val lastEntry = mockk<Entry>()
-
-        every { internalLog.size } returns 2
-        every { internalLog.isEmpty() } returns false
-        every { internalLog.last() } returns lastEntry
-        every { internalLog[1] } returns lastEntry
-        every { lastEntry.term } returns lastEntryTerm
-
-        val log = Log(term = currentTerm, log = internalLog)
-
-        val req = log.buildVoteRequest(candidateID)
-        req.term shouldBe currentTerm
-        req.candidateID shouldBe candidateID
-        req.lastLogIndex shouldBe internalLog.size
-        req.lastLogTerm shouldBe lastEntryTerm
+    "Test initializes to voting for no one" {
+        Log(Random.nextInt()).votedFor shouldBe null
     }
 
-    "test fresh append request" {
-        val leaderID = 0
-        val currentTerm = 0
-        val prevLogIndex = 0
-        val leaderCommit = 0
-        val internalLog = emptyList<Entry>().toMutableList()
+    "Test vote for self" {
+        val id = Random.nextInt()
 
-        val log = Log(term = currentTerm, log = internalLog)
+        val log = Log(id)
 
-        val req = log.buildAppendRequest(leaderID, prevLogIndex, leaderCommit)
-        req.term shouldBe currentTerm
-        req.leaderID shouldBe leaderID
-        req.prevLogIndex shouldBe prevLogIndex
-        req.entriesList.isEmpty() shouldBe true
-        req.leaderCommit shouldBe leaderCommit
+        log.votedFor shouldBe null
+        log.voteForSelf().votedFor shouldBe id
     }
 
-    // Add the additional entry at index 1 to the follower's list
-    "test ongoing append request" {
-        val leaderID = 0
-        val currentTerm = 5
-        val prevLogIndex = 1
-        val leaderCommit = 2
-        val lastEntryTerm = 3
-        val lastEntry = mockk<Entry>()
-        val internalLog = listOf(lastEntry, lastEntry).toMutableList()
+    "Test change term" {
+        val id = Random.nextInt()
+        val term = Random.nextInt()
+        val nextTerm = Random.nextInt() + 10
 
-        every { lastEntry.term } returns lastEntryTerm
+        val log = Log(id, term = term)
 
-        val log = Log(term = currentTerm, log = internalLog)
-
-        val req = log.buildAppendRequest(leaderID, prevLogIndex, leaderCommit)
-        req.term shouldBe currentTerm
-        req.leaderID shouldBe leaderID
-        req.prevLogIndex shouldBe prevLogIndex
-        req.entriesList shouldBe listOf(lastEntry)
-        req.leaderCommit shouldBe leaderCommit
-    }
-
-    "test fresh vote request" {
-        val currentTerm = 0
-        val candidateID = 0
-        val req = mockk<VoteRequest>()
-
-        every { req.candidateID } returns candidateID
-        every { req.term } returns currentTerm
-        every { req.lastLogIndex } returns 0
-        every { req.lastLogTerm } returns 0
-
-        val log = Log(term = currentTerm, votedFor = null)
-        val res = log.vote(req)
-        res.term shouldBe currentTerm
-        res.voteGranted shouldBe true
-    }
-
-    "test ongoing vote request" {
-        val currentTerm = 0
-        val candidateID = 32
-        val req = mockk<VoteRequest>()
-
-        every { req.candidateID } returns candidateID
-        every { req.term } returns currentTerm
-        every { req.lastLogIndex } returns 0
-        every { req.lastLogTerm } returns 0
-
-        val log = Log(term = currentTerm, votedFor = candidateID)
-        val res = log.vote(req)
-        res.term shouldBe currentTerm
-        res.voteGranted shouldBe true
-    }
-
-    "test ongoing vote request bad term" {
-        val currentTerm = 5
-        val candidateID = 32
-        val req = mockk<VoteRequest>()
-
-        every { req.candidateID } returns candidateID
-        every { req.term } returns 0
-        every { req.lastLogIndex } returns 0
-        every { req.lastLogTerm } returns 1
-
-        val log = Log(term = currentTerm, votedFor = candidateID)
-
-        val res = log.vote(req)
-        res.term shouldBe currentTerm
-        res.voteGranted shouldBe false
-    }
-
-    "test ongoing vote request bad log size" {
-        val currentTerm = 5
-        val candidateID = 32
-        val internalLogEntry = mockk<Entry>()
-        val internalLog = listOf(internalLogEntry).toMutableList()
-        val req = mockk<VoteRequest>()
-
-        every { internalLogEntry.term } returns 1
-        every { req.candidateID } returns candidateID
-        every { req.term } returns 0
-        every { req.lastLogIndex } returns 0
-        every { req.lastLogTerm } returns 1
-
-        val log = Log(term = currentTerm, votedFor = candidateID, log = internalLog)
-
-        val res = log.vote(req)
-        res.term shouldBe currentTerm
-        res.voteGranted shouldBe false
-    }
-
-    // TODO: Test multiple vote requests
-    // TODO: Request builders or at least constant definitions
-
-    "increment term resets votedFor" {
-        // TODO: Decouple so not having to test voting to see that can vote
-        val currentVotedFor = 32
-        val currentTerm = 16
-        val newTerm = 18
-        val log = Log(votedFor = currentVotedFor, term = currentTerm)
-
-        log.changeTerm(newTerm)
-
-        log.leader() shouldBe null
-    }
-
-    "can only increment term" {
-        val currentTerm = 16
-        val lowerTerm = 14
-        val sameTerm = 16
-        val higherTerm = 18
-        val log = Log(term = currentTerm)
-
-        shouldThrow<IllegalArgumentException> {
-            log.changeTerm(lowerTerm)
-        }
-        shouldThrow<IllegalArgumentException> {
-            log.changeTerm(sameTerm)
-        }
-        shouldNotThrow<IllegalArgumentException> {
-            log.changeTerm(higherTerm)
-        }
-
-        log.term() shouldBe higherTerm
+        log.term shouldBe term
+        log.changeTerm(nextTerm).term shouldBe nextTerm
     }
 })

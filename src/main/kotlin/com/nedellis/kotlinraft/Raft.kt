@@ -31,6 +31,7 @@ class Raft(private val port: Int, private val clients: List<Int>) {
 }
 
 private class RaftService(private val node: Node) : RaftGrpcKt.RaftCoroutineImplBase() {
+    @ExperimentalStdlibApi
     @ExperimentalCoroutinesApi
     override suspend fun append(request: AppendRequest): AppendResponse {
         return node.append(request)
@@ -48,6 +49,7 @@ private class ControlService(private val node: Node) : ControlGrpcKt.ControlCoro
         return node.getEntry(request)
     }
 
+    @ExperimentalStdlibApi
     @ExperimentalCoroutinesApi
     override suspend fun updateEntry(request: Entry): UpdateStatus {
         return node.updateEntry(request)
