@@ -17,6 +17,9 @@ $ ./gradlew run
 
 # Jar (Found in ./build/libs/)
 $ ./gradlew shadowJar
+
+# Docker
+$ docker build -t epelesis/raft .
 ```
 
 ## Envoy

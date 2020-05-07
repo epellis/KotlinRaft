@@ -3,7 +3,6 @@ package com.nedellis.kotlinraft
 import io.kotest.assertions.throwables.shouldNotThrow
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
-import io.kotest.fp.success
 import io.kotest.matchers.shouldBe
 import io.mockk.every
 import io.mockk.mockk
